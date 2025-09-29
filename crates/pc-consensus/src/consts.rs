@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 #![allow(dead_code)]
 
 // Empfohlene Default-Konstanten für Konsens (v0)

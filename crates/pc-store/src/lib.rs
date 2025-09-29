@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 #![forbid(unsafe_code)]
 use anyhow::{anyhow, Result};
 use pc_codec::{Decodable, Encodable};

@@ -841,11 +841,11 @@ checksum = "d05e27ee213611ffe7d6348b942e8f942b37114c00cc03cec254295a4a17852e"
 
 [[package]]
 name = "pc-codec"
-version = "0.0.1"
+version = "0.1.1"
 
 [[package]]
 name = "pc-consensus"
-version = "0.0.1"
+version = "0.1.1"
 dependencies = [
  "pc-crypto",
  "pc-types",
@@ -853,14 +853,14 @@ dependencies = [
 
 [[package]]
 name = "pc-crypto"
-version = "0.0.1"
+version = "0.1.1"
 dependencies = [
  "blake3",
 ]
 
 [[package]]
 name = "pc-da"
-version = "0.0.1"
+version = "0.1.1"
 dependencies = [
  "pc-codec",
  "pc-types",
@@ -870,7 +870,7 @@ dependencies = [
 
 [[package]]
 name = "pc-p2p"
-version = "0.0.1"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "futures-util",
@@ -885,7 +885,7 @@ dependencies = [
 
 [[package]]
 name = "pc-state"
-version = "0.0.1"
+version = "0.1.1"
 dependencies = [
  "pc-crypto",
  "pc-types",
@@ -894,7 +894,7 @@ dependencies = [
 
 [[package]]
 name = "pc-store"
-version = "0.0.1"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "hex",
@@ -905,7 +905,7 @@ dependencies = [
 
 [[package]]
 name = "pc-types"
-version = "0.0.1"
+version = "0.1.1"
 dependencies = [
  "pc-codec",
  "pc-crypto",
@@ -930,7 +930,7 @@ dependencies = [
 
 [[package]]
 name = "phantom-node"
-version = "0.0.1"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",

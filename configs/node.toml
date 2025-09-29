@@ -1,0 +1,11 @@
+# Phantom-Node example configuration
+# SPDX-License-Identifier: AGPL-3.0-only
+
+[consensus]
+# Committee size (1..=64); overridden by --genesis if provided
+k = 21
+
+[node.cache]
+# LRU capacities; 0 disables the respective cache
+header_cap = 10000
+payload_cap = 5000

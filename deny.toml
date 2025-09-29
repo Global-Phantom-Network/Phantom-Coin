@@ -1,0 +1,33 @@
+# cargo-deny configuration
+# See: https://github.com/EmbarkStudios/cargo-deny
+
+[advisories]
+# Deny known vulnerabilities
+vulnerability = "deny"
+# Warn on unmaintained/yanked/notice
+unmaintained = "warn"
+yanked = "warn"
+notice = "warn"
+
+[licenses]
+# We allow common OSS licenses used by dependencies; the project itself is AGPL-3.0-only
+# This prevents false positives for MIT/Apache/BSD crates.
+allow = [
+    "AGPL-3.0", "AGPL-3.0-only", "AGPL-3.0-or-later",
+    "MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause",
+    "ISC", "Zlib", "Unicode-DFS-2016", "MPL-2.0", "CC0-1.0", "OpenSSL"
+]
+# Deny copyleft licenses stronger than GPL-3.0, except our own (AGPL)
+deny = [
+    "LGPL-2.1", "LGPL-3.0", "GPL-2.0", "GPL-3.0"
+]
+
+[bans]
+# Deny duplicate crate versions where possible
+multiple-versions = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = ["https://github.com/*"]
