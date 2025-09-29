@@ -1,12 +1,23 @@
 # Phantom-Coin
 
-Phantom-Coin ist eine modulare, asynchrone Rust-Codebasis für einen DAG-basierten L1 ohne Unix-Zeit im Konsenspfad. Ziel: hohe Finalisierungsraten (≥1M Events/s via Sharding), sichere Persistenz (FileStore), QUIC-P2P-Transport und Prometheus-Metriken.
+Phantom-Coin is a modular, asynchronous Rust codebase for a DAG-based Layer 1 with no Unix time in the consensus or protocol path. Goals: predictable, high finality throughput (via sharding), durable persistence, QUIC-based P2P transport, and first-class Prometheus observability.
 
-- Crates (Auswahl):
-  - `pc-p2p`: P2P-Protokoll, QUIC-Transport (optional), Async-Service, Metriken, Inbound-Observer.
-  - `pc-consensus`: DAG/aBFT-Kern (v0), Finalität, Fees/Rewards-Hilfsfunktionen.
-  - `pc-store`: FileStore-Persistenz für `AnchorHeader`/`AnchorPayload` (atomare Writes, fsync-Option).
-  - `phantom-node`: Binaries/CLI (QUIC-Listener, Metrik-Server, Konsens-Tools), Store-Integration via Delegate.
+- **Core assumptions (v0)**
+  - L1: pure UTXO (eUTXO predicates v0), no EVM on the hot path; PoW only for emission.
+  - Consensus: leaderless DAG + aBFT, O(1) finality using u64 `vote_mask`; total order by `(consensus_time, event_id)`; no Unix time in consensus.
+  - Sharding: initial S≈64; committee per shard k≈21 (k≤64); parents P≤4 (≥1 cross-link for k≥2).
+  - Fees/Payouts: deterministic fee split via Merkle payout root; basis floor + small proposer share + capped performance bonus (ack distance) + attestor pool.
+  - Time rule: Unix time may be used for UI/logs only, never consensus-relevant.
+
+## Crates (selected)
+
+- `pc-p2p`: P2P protocol, QUIC transport (optional), async service, metrics, inbound observer.
+- `pc-consensus`: DAG/aBFT core (v0), finality checks, fees/rewards helpers.
+- `pc-store`: FileStore for `AnchorHeader`/`AnchorPayload` (atomic writes, optional fsync).
+- `pc-state`: UTXO state engine backends (e.g. RocksDB/InMemory) used by `phantom-node`.
+- `pc-types`/`pc-codec`: canonical types and encodings.
+- `pc-crypto`: cryptographic primitives (e.g. BLAKE3 digests, signature helpers).
+- `phantom-node`: binaries/CLI (QUIC listener, metrics server, consensus tools), integrates store/state.
 
 ## Build
 
@@ -14,32 +25,43 @@ Phantom-Coin ist eine modulare, asynchrone Rust-Codebasis für einen DAG-basiert
 cargo build --release
 ```
 
-Tests:
+## Test
 
 ```bash
-cargo test
+cargo test --workspace --all-targets
 ```
 
-## Start: QUIC-Listener (mit Persistenz und Metriken)
+## Quick start
+
+Start a QUIC listener with persistence and metrics:
 
 ```bash
 phantom-node P2pQuicListen \
   --addr 127.0.0.1:9000 \
   --genesis ./genesis.toml \
   --store_dir pc-data \
-  --fsync true
+  --fsync true \
+  --tx_proposer true \
+  --tx_proposer_interval_ms 5000 \
+  --txs_per_payload 1024 \
+  --payload_budget_bytes 1048576
 ```
 
-- Zertifikat ausgeben (optional): `--cert_out server.der`
-- Prometheus-Metriken: `curl -s http://127.0.0.1:9100/metrics` (siehe `P2pMetricsServe` bzw. Kombi-Binary, falls vorhanden)
-- Persistenz-Metriken (node-spezifisch): `pc_node_*`-Counter
+- Optional QUIC certificate export: `--cert_out server.der`
+- Prometheus metrics endpoint: `curl -s http://127.0.0.1:9100/metrics` (see `P2pMetricsServe`)
 
-## Genesis (verbindliche Konfiguration)
+Serve metrics on a dedicated HTTP endpoint:
 
-Die Genesis-Datei legt konsenskritische Parameter fest und wird kryptographisch validiert. k (Committee-Größe) wird strikt aus Genesis gezogen (falls angegeben) und überschreibt CLI/Config.
+```bash
+phantom-node P2pMetricsServe --addr 127.0.0.1:9100
+```
 
-- Detaillierte Anleitung: `docs/GENESIS.md`
-- Format (Auszug):
+## Genesis (authoritative configuration)
+
+The genesis file fixes consensus‑critical parameters and is cryptographically validated. `k` (committee size) is read from genesis (if present) and overrides CLI/config.
+
+- Detailed guide: `docs/GENESIS.md`
+- Example:
 
 ```toml
 [consensus]
@@ -49,15 +71,15 @@ genesis_note = "<64-hex-bytes>"
 commitment   = "<64-hex-bytes>" # blake3_32(genesis_note_raw)
 ```
 
-Logs bei erfolgreichem Laden:
+Log (on successful load):
 
 ```
-{"type":"genesis_loaded","k":<wert>,"commitment":"<hex64>"}
+{"type":"genesis_loaded","k":<value>,"commitment":"<hex64>"}
 ```
 
-## Konsens-Tools
+## Consensus tools
 
-- Ack-Distanzen:
+- Ack distances:
 
 ```bash
 phantom-node ConsensusAckDists \
@@ -66,7 +88,7 @@ phantom-node ConsensusAckDists \
   --genesis ./genesis.toml
 ```
 
-- Committee-Payout-Root:
+- Committee payout root:
 
 ```bash
 phantom-node ConsensusPayoutRoot \
@@ -78,38 +100,46 @@ phantom-node ConsensusPayoutRoot \
   --genesis ./genesis.toml
 ```
 
-Ohne `--genesis` fällt k auf CLI zurück (nur für lokale Entwicklung empfohlen).
+If `--genesis` is omitted, `k` falls back to CLI/config (local development only).
 
-## Metriken (Prometheus)
+## Mempool & proposer policy
 
-- P2P: `pc_p2p_*` (Inbound/Outbound, Drops, Latenzen, Errors, Buckets)
-- Node-spezifisch: `pc_node_*` (Persistenz-Erfolge/-Fehler, Observer-Lag, Cache-Hits/-Misses)
-- HTTP-Endpunkt liefert nur auf Pfad `/metrics` (text/plain; version=0.0.4)
+The optional tx‑proposer periodically builds payloads from the mempool:
 
-Zusätzlich exportiert der Node die Disk-Read-Latenzen des Stores als Histogramme:
+- CLI flags: `--tx_proposer`, `--tx_proposer_interval_ms`, `--txs_per_payload`, `--payload_budget_bytes`.
+- Selection policy: prefer smaller txs first, then older; avoid input conflicts; skip txs already queued in pending payloads.
+- Fairness: round‑robin across LockCommitment groups (first output lock) to avoid starvation.
+- Deterministic sorting: final tx list is sorted by `digest_microtx()` before building the payload.
 
-- `pc_node_store_header_read_seconds` (Histogram)
-- `pc_node_store_payload_read_seconds` (Histogram)
+## Observability
 
-Buckets: `le="0.001"`, `0.005`, `0.01`, `0.05`, `0.1`, `0.5`, `+Inf`; zudem `*_sum`, `*_count`.
+- Prometheus metrics
+  - P2P: `pc_p2p_*` (inbound/outbound, drops, latencies, errors, outbox enq/deq)
+  - Node: `pc_node_*` (mempool size/accepted/rejected/duplicate/evictions/invalidated, proposer built/last_size/errors/pending)
+  - Store timings: `pc_node_store_header_read_seconds`, `pc_node_store_payload_read_seconds` (histograms)
+- Grafana dashboard: `docs/grafana/phantom-node-mempool-dashboard.json`
+  - Includes panels for evictions, invalidations, proposer stats, and P2P flows
+- Alerts (Prometheus): `docs/prometheus/phantom-node-alerts.yaml`
+- Optional local stack (Prometheus + Grafana): `docs/observability/docker-compose.yml`
 
-## Persistenz
+## Persistence
 
-- `pc-store::FileStore`: atomic writes, Verzeichnisstruktur `headers/` und `payloads/`, optional `fsync`.
-- Integration über `StoreDelegate` (im `pc-p2p` Async-Service); I/O erfolgt außerhalb des Async-Hotpaths via `spawn_blocking`.
+- `pc-store::FileStore`: atomic writes under `headers/` and `payloads/` with optional `--fsync`.
+- Access is delegated from async tasks via `spawn_blocking` to avoid stalling the hot path.
 
-## Node-Cache (LRU)
+## Node cache (LRU)
 
-- Optionaler LRU-Cache vor `pc-store::FileStore` reduziert Disk-I/O für Header/Payloads.
-- Konfiguration über TOML:
+Optional LRU caches reduce disk I/O for headers/payloads.
+
+Config (TOML):
 
 ```toml
 [node.cache]
-header_cap = 10000   # 0=aus
-payload_cap = 5000   # 0=aus
+header_cap = 10000   # 0 = disabled
+payload_cap = 5000   # 0 = disabled
 ```
 
-- CLI-Override (hat Vorrang vor Config):
+CLI overrides (take precedence):
 
 ```bash
 phantom-node P2pQuicListen \
@@ -121,12 +151,11 @@ phantom-node P2pQuicListen \
   --cache_pl_cap 5000
 ```
 
-- Metriken: `pc_node_cache_headers_hits_total`, `pc_node_cache_headers_misses_total`, `pc_node_cache_payloads_hits_total`, `pc_node_cache_payloads_misses_total`.
-- Hinweis: RAM-Bedarf skaliert mit Kapazitäten; auf Raspberry Pi 5 konservativ starten (z. B. header≈10k, payload≈2–5k) und per Metriken/Bench feinjustieren.
+Metrics: `pc_node_cache_headers_hits_total`, `pc_node_cache_headers_misses_total`, `pc_node_cache_payloads_hits_total`, `pc_node_cache_payloads_misses_total`.
 
-## CacheBench (Benchmark)
+## CacheBench (micro-benchmark)
 
-Misst Cache-Hit/Miss-Effekte und Laufzeit gegen FileStore anhand vorhandener Dateien in `store_dir/headers|payloads`.
+Measures cache hit/miss effects and runtime against FileStore using existing files in `store_dir/headers|payloads`.
 
 ```bash
 # Headers
@@ -148,14 +177,19 @@ phantom-node CacheBench \
   --cache_pl_cap 5000
 ```
 
-Output (JSON): Felder u. a. `hdr_hits`, `hdr_misses`, `pl_hits`, `pl_misses`, `elapsed_ms`.
+JSON output includes `hdr_hits`, `hdr_misses`, `pl_hits`, `pl_misses`, `elapsed_ms`.
 
-## Sicherheit & Performance
+## CI & Releases
 
-- Keine Unix-Zeit im Konsens-/Protokollpfad (nur Logging/UI).
-- Asynchrone, Multi-Core-fähige Architektur (Tokio). Zielplattform inkl. Raspberry Pi 5.
-- Für hohe Durchsätze: fsync konfigurieren (`--fsync true/false`) und später Cache/DB-Backends erwägen.
+- CI: `.github/workflows/ci.yml` (fmt, clippy −D warnings, build, tests, feature checks)
+- Release: `.github/workflows/release.yml` (tagged builds `v*.*.*`, Linux/macOS artifacts)
 
-## Lizenz
+## Security & performance notes
 
-MIT oder Apache-2.0 (dual).
+- No Unix time in consensus/protocol path (UI/logs only).
+- Async, multi‑core friendly (Tokio). Targets include Raspberry Pi 5.
+- For sustained throughput, tune `--fsync` and consider DB backends/caches.
+
+## License
+
+Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0-only). See `LICENSE`.
