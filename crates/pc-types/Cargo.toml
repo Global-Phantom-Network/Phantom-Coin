@@ -1,0 +1,12 @@
+[package]
+name = "pc-types"
+version = "0.0.1"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+pc-crypto = { path = "../pc-crypto" }
+pc-codec = { path = "../pc-codec" }
+
+[dev-dependencies]
+proptest = "1.5"

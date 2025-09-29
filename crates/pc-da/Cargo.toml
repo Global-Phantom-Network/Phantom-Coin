@@ -1,0 +1,15 @@
+[package]
+name = "pc-da"
+version = "0.0.1"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+pc-codec = { path = "../pc-codec" }
+pc-types = { path = "../pc-types" }
+tracing = "0.1"
+tokio = { version = "1.39", features = ["rt-multi-thread", "macros", "sync", "time", "signal"], optional = true }
+
+[features]
+default = []
+async = ["tokio"]

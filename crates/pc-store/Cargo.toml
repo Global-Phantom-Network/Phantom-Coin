@@ -1,0 +1,15 @@
+[package]
+name = "pc-store"
+version = "0.0.1"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+anyhow = "1"
+hex = "0.4"
+pc-codec = { path = "../pc-codec" }
+pc-types = { path = "../pc-types" }
+tempfile = "3"
+
+[features]
+# Platzhalterfrei: keine optionalen Features vorerst

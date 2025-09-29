@@ -1,0 +1,192 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_PROMETHEUS",
+      "label": "Prometheus",
+      "description": "",
+      "type": "datasource",
+      "pluginId": "prometheus",
+      "pluginName": "Prometheus"
+    }
+  ],
+  "__requires": [
+    { "type": "grafana", "id": "grafana", "name": "Grafana", "version": "9.5.0" },
+    { "type": "panel", "id": "timeseries", "name": "Time series", "version": "8.5.0" },
+    { "type": "panel", "id": "stat", "name": "Stat", "version": "8.5.0" },
+    { "type": "datasource", "id": "prometheus", "name": "Prometheus", "version": "1.0.0" }
+  ],
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "grafana"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Header Hit Rate (5m)",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": { "unit": "percentunit", "decimals": 1 },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "orientation": "horizontal", "textMode": "auto", "colorMode": "value", "graphMode": "none", "justifyMode": "auto" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "increase(pc_node_cache_headers_hits_total{instance=\"$instance\"}[5m]) / (increase(pc_node_cache_headers_hits_total{instance=\"$instance\"}[5m]) + increase(pc_node_cache_headers_misses_total{instance=\"$instance\"}[5m]))"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Payload Hit Rate (5m)",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "decimals": 1 }, "overrides": [] },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "orientation": "horizontal", "textMode": "auto", "colorMode": "value", "graphMode": "none", "justifyMode": "auto" },
+      "targets": [
+        { "refId": "A", "expr": "increase(pc_node_cache_payloads_hits_total{instance=\"$instance\"}[5m]) / (increase(pc_node_cache_payloads_hits_total{instance=\"$instance\"}[5m]) + increase(pc_node_cache_payloads_misses_total{instance=\"$instance\"}[5m]))" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Header Reads/s (5m)",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "reqps", "decimals": 2 }, "overrides": [] },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "orientation": "horizontal", "textMode": "auto", "colorMode": "value", "graphMode": "none", "justifyMode": "auto" },
+      "targets": [ { "refId": "A", "expr": "rate(pc_node_store_header_read_seconds_count{instance=\"$instance\"}[5m])" } ]
+    },
+    {
+      "type": "stat",
+      "title": "Payload Reads/s (5m)",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "reqps", "decimals": 2 }, "overrides": [] },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "orientation": "horizontal", "textMode": "auto", "colorMode": "value", "graphMode": "none", "justifyMode": "auto" },
+      "targets": [ { "refId": "A", "expr": "rate(pc_node_store_payload_read_seconds_count{instance=\"$instance\"}[5m])" } ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Headers: hit/miss rate (1m)",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "ops", "decimals": 2 }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "refId": "A", "expr": "rate(pc_node_cache_headers_hits_total{instance=\"$instance\"}[1m])", "legendFormat": "hits/s" },
+        { "refId": "B", "expr": "rate(pc_node_cache_headers_misses_total{instance=\"$instance\"}[1m])", "legendFormat": "misses/s" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Payloads: hit/miss rate (1m)",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "ops", "decimals": 2 }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "refId": "A", "expr": "rate(pc_node_cache_payloads_hits_total{instance=\"$instance\"}[1m])", "legendFormat": "hits/s" },
+        { "refId": "B", "expr": "rate(pc_node_cache_payloads_misses_total{instance=\"$instance\"}[1m])", "legendFormat": "misses/s" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Store Header Read P50/P90/P99 (5m)",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "s", "decimals": 3 }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.5, sum by (le) (rate(pc_node_store_header_read_seconds_bucket{instance=\"$instance\"}[5m])))", "legendFormat": "p50" },
+        { "refId": "B", "expr": "histogram_quantile(0.9, sum by (le) (rate(pc_node_store_header_read_seconds_bucket{instance=\"$instance\"}[5m])))", "legendFormat": "p90" },
+        { "refId": "C", "expr": "histogram_quantile(0.99, sum by (le) (rate(pc_node_store_header_read_seconds_bucket{instance=\"$instance\"}[5m])))", "legendFormat": "p99" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Store Payload Read P50/P90/P99 (5m)",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "s", "decimals": 3 }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.5, sum by (le) (rate(pc_node_store_payload_read_seconds_bucket{instance=\"$instance\"}[5m])))", "legendFormat": "p50" },
+        { "refId": "B", "expr": "histogram_quantile(0.9, sum by (le) (rate(pc_node_store_payload_read_seconds_bucket{instance=\"$instance\"}[5m])))", "legendFormat": "p90" },
+        { "refId": "C", "expr": "histogram_quantile(0.99, sum by (le) (rate(pc_node_store_payload_read_seconds_bucket{instance=\"$instance\"}[5m])))", "legendFormat": "p99" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Header Read Mean (5m)",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "s", "decimals": 3 }, "overrides": [] },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 20 },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "orientation": "horizontal", "textMode": "auto", "colorMode": "value", "graphMode": "none", "justifyMode": "auto" },
+      "targets": [ { "refId": "A", "expr": "rate(pc_node_store_header_read_seconds_sum{instance=\"$instance\"}[5m]) / rate(pc_node_store_header_read_seconds_count{instance=\"$instance\"}[5m])" } ]
+    },
+    {
+      "type": "stat",
+      "title": "Payload Read Mean (5m)",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "s", "decimals": 3 }, "overrides": [] },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 20 },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "orientation": "horizontal", "textMode": "auto", "colorMode": "value", "graphMode": "none", "justifyMode": "auto" },
+      "targets": [ { "refId": "A", "expr": "rate(pc_node_store_payload_read_seconds_sum{instance=\"$instance\"}[5m]) / rate(pc_node_store_payload_read_seconds_count{instance=\"$instance\"}[5m])" } ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Persisted headers/payloads rate (1m)",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "ops", "decimals": 2 }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "refId": "A", "expr": "rate(pc_node_persist_headers_total{instance=\"$instance\"}[1m])", "legendFormat": "persist headers/s" },
+        { "refId": "B", "expr": "rate(pc_node_persist_payloads_total{instance=\"$instance\"}[1m])", "legendFormat": "persist payloads/s" }
+      ]
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["phantom-node", "cache", "store", "prometheus"],
+  "templating": {
+    "list": [
+      {
+        "name": "instance",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+        "refresh": 2,
+        "hide": 0,
+        "query": "label_values(pc_node_persist_headers_total, instance)",
+        "includeAll": false,
+        "multi": false,
+        "sort": 1
+      }
+    ]
+  },
+  "time": { "from": "now-6h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Phantom-Node: Cache & Store",
+  "version": 1
+}

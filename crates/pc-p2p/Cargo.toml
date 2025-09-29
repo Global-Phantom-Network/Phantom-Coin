@@ -1,0 +1,21 @@
+[package]
+name = "pc-p2p"
+version = "0.0.1"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+pc-codec = { path = "../pc-codec" }
+pc-types = { path = "../pc-types" }
+tracing = "0.1"
+tokio = { version = "1.39", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util"], optional = true }
+async-trait = { version = "0.1", optional = true }
+quinn = { version = "0.10", optional = true }
+rustls = { version = "0.21", optional = true }
+rcgen = { version = "0.11", optional = true }
+futures-util = { version = "0.3", default-features = true, optional = true }
+
+[features]
+default = []
+async = ["tokio", "async-trait"]
+quic = ["async", "quinn", "rustls", "rcgen", "futures-util"]

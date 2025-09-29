@@ -1,0 +1,9 @@
+target/
+**/*.rs.bk
+**/*.swp
+.DS_Store
+
+# test certs/keys & binary fixtures (nicht ins public repo)
+*.der
+*.pem
+test_*.bin
