@@ -460,6 +460,8 @@ impl AnchorHeader {
 // ============================
 
 pub type Amount = u64; // kleinste Einheit (z. B. 1e-8 PC)
+/// Globaler, monotoner Anchor-Index (uhrfrei). Dient u. a. für Maturity-Stufen.
+pub type AnchorIndex = u64;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub struct OutPoint {

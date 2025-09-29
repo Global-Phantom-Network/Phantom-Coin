@@ -6,6 +6,13 @@
 
 pub const RECOMMENDED_K: u8 = 21; // Richtwert; tatsächliches k kommt aus Genesis/Config
 
+// Sharding (v0)
+pub const SHARDS_INITIAL: u16 = 64; // Startkonfiguration S=64
+pub const K_MAX: u8 = 64; // harte Obergrenze: k ≤ 64 (vote_mask passt in u64)
+
+// Empfohlene Batch-/Payload-Defaults (nicht konsenserzwingend; CLI/Config kann überschreiben)
+pub const DEFAULT_TXS_PER_PAYLOAD: usize = 256; // B≈256 als praxisnahe Default-Obergrenze
+
 // Fee-Split (Basispunkte; Summe = 10_000)
 pub const P_BASE_BP: u16 = 6500; // Basis-Anteil (gleichmäßig auf k Seats)
 pub const P_PROP_BP: u16 = 1000; // Proposer-Anteil
