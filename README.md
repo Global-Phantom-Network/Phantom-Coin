@@ -1,12 +1,16 @@
 # Phantom-Coin
 
-Phantom-Coin is a modular, asynchronous Rust codebase for a DAG-based Layer 1 with no Unix time in the consensus or protocol path. Goals: predictable, high finality throughput (via sharding), durable persistence, QUIC-based P2P transport, and first-class Prometheus observability.
+Phantom-Coin is a modular, asynchronous Rust codebase for a DAG-based Layer 1 with no Unix time in the consensus or protocol path. Goals: predictable, high finality throughput (via sharding; target ≥1M events/s ≈ TPS), durable persistence, QUIC-based P2P transport, and first-class Prometheus observability. The monetary supply is hard-capped at 50,000,000 PC (1 PC = 100,000,000 units).
+
+Coins are issued exclusively via Proof-of-Work (emission only). After issuance, ordering and finality are provided by a leaderless DAG + aBFT engine with O(1) finality; Unix time is never part of the consensus path.
 
 - **Core assumptions (v0)**
   - L1: pure UTXO (eUTXO predicates v0), no EVM on the hot path; PoW only for emission.
   - Consensus: leaderless DAG + aBFT, O(1) finality using u64 `vote_mask`; total order by `(consensus_time, event_id)`; no Unix time in consensus.
   - Sharding: initial S≈64; committee per shard k≈21 (k≤64); parents P≤4 (≥1 cross-link for k≥2).
   - Fees/Payouts: deterministic fee split via Merkle payout root; basis floor + small proposer share + capped performance bonus (ack distance) + attestor pool.
+  - Monetary policy: hard cap 50,000,000 PC; divisibility 1 PC = 100,000,000 units.
+  - Decentralization: fully leaderless and coordinator-free consensus; no central authority in the hot path.
   - Time rule: Unix time may be used for UI/logs only, never consensus-relevant.
 
 ## Crates (selected)
