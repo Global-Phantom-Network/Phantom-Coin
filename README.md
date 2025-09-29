@@ -208,6 +208,10 @@ JSON output includes `hdr_hits`, `hdr_misses`, `pl_hits`, `pl_misses`, `elapsed_
 - Async, multi‑core friendly (Tokio). Targets include Raspberry Pi 5.
 - For sustained throughput, tune `--fsync` and consider DB backends/caches.
 
+### Further specs
+
+- Maturity (uhrfrei, globaler Anchor‑Index): `docs/SPEC_MATURITY.md`
+
 ## License
 
 Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0-only). See `LICENSE`.

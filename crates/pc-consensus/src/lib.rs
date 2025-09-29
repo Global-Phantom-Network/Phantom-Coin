@@ -3,13 +3,12 @@
 #![deny(
     clippy::unwrap_used,
     clippy::expect_used,
-    clippy::panic,
     clippy::todo,
     clippy::unimplemented,
     clippy::indexing_slicing
 )]
 
-use pc_types::{Amount, AnchorHeader, AnchorId, PayoutEntry, PayoutSet};
+use pc_types::{Amount, AnchorHeader, AnchorId, AnchorIndex, PayoutEntry, PayoutSet};
 pub mod consts;
 
 #[derive(Debug)]
@@ -18,129 +17,19 @@ pub enum ConsensusError {
     InvalidParams,
 }
 
-impl Default for AnchorGraph {
-    fn default() -> Self {
-        Self::new()
-    }
+#[inline]
+pub fn finality_threshold(k: u8) -> u8 {
+    ((2 * k) / 3) + 1
 }
 
-/// Vereint Committee- und Attestor-Payouts und gibt die finale Payout-Root zurück.
-pub fn compute_total_payout_root(
-    fees_total: Amount,
-    params: &FeeSplitParams,
-    recipients: &[[u8; 32]],
-    proposer_index: usize,
-    ack_distances: &[Option<u8>],
-    attestors: &[[u8; 32]],
-) -> Result<pc_crypto::Hash32, ConsensusError> {
-    let committee = compute_committee_payout(
-        fees_total,
-        params,
-        recipients,
-        proposer_index,
-        ack_distances,
-    )?;
-    let att = compute_attestor_payout(fees_total, params, attestors)?;
-    let mut entries = committee.entries;
-    entries.extend_from_slice(&att.entries);
-    let set = PayoutSet { entries };
-    Ok(set.payout_root())
+#[inline]
+pub fn is_final(popcount: u8, k: u8) -> bool {
+    popcount >= finality_threshold(k)
 }
 
-/// Liefert pro Seat (0..k-1) die minimale Ack-Distanz (in Kanten) vom gegebenen ack_id
-/// zu irgendeinem Anker dieses Seats innerhalb der übergebenen Header-Menge.
-/// Distanz 1 entspricht direktem Parent; Distanz 0 (ack selbst) wird nicht gewertet.
-pub fn compute_ack_distances_for_seats(
-    ack_id: AnchorId,
-    headers: &[AnchorHeader],
-    k: u8,
-    d_max: u8,
-) -> Vec<Option<u8>> {
-    use std::collections::{HashMap, HashSet, VecDeque};
-    let mut out: Vec<Option<u8>> = vec![None; k as usize];
-    if k == 0 || headers.is_empty() {
-        return out;
-    }
-    let mut id_to_idx: HashMap<AnchorId, usize> = HashMap::with_capacity(headers.len());
-    for (i, h) in headers.iter().enumerate() {
-        let hid = AnchorId(h.id_digest());
-        id_to_idx.insert(hid, i);
-    }
-    let mut visited: HashSet<AnchorId> = HashSet::new();
-    let mut dist: HashMap<AnchorId, u8> = HashMap::new();
-    let mut q: VecDeque<AnchorId> = VecDeque::new();
-    q.push_back(ack_id);
-    visited.insert(ack_id);
-    dist.insert(ack_id, 0);
-    while let Some(cur) = q.pop_front() {
-        let cur_d = *dist.get(&cur).unwrap_or(&0);
-        if let Some(&idx) = id_to_idx.get(&cur) {
-            if let Some(h) = headers.get(idx) {
-                if cur_d >= 1 {
-                    let seat = h.creator_index as usize;
-                    if seat < (k as usize) {
-                        if let Some(slot) = out.get_mut(seat) {
-                            match slot {
-                                None => *slot = Some(cur_d),
-                                Some(prev) => {
-                                    if cur_d < *prev {
-                                        *slot = Some(cur_d);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                if cur_d < d_max {
-                    let plen = h.parents.len as usize;
-                    for pid in h.parents.ids.iter().take(plen) {
-                        let pid = *pid;
-                        if !visited.contains(&pid) {
-                            visited.insert(pid);
-                            dist.insert(pid, cur_d.saturating_add(1));
-                            q.push_back(pid);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    out
-}
-
-/// Wrapper: berechnet Ack-Distanzen aus Headern und erzeugt daraus das Committee-Payout
-pub fn compute_committee_payout_from_headers(
-    fees_total: Amount,
-    params: &FeeSplitParams,
-    recipients: &[[u8; 32]],
-    proposer_index: usize,
-    ack_id: AnchorId,
-    headers: &[AnchorHeader],
-    k: u8,
-) -> Result<PayoutSet, ConsensusError> {
-    if recipients.len() != k as usize {
-        return Err(ConsensusError::InvalidParams);
-    }
-    let dists = compute_ack_distances_for_seats(ack_id, headers, k, params.d_max);
-    compute_committee_payout(fees_total, params, recipients, proposer_index, &dists)
-}
-
-/// Convenience: Liefert direkt die Merkle-Root des Committee-Payouts
-pub fn committee_payout_root(
-    fees_total: Amount,
-    params: &FeeSplitParams,
-    recipients: &[[u8; 32]],
-    proposer_index: usize,
-    ack_distances: &[Option<u8>],
-) -> Result<pc_crypto::Hash32, ConsensusError> {
-    let set = compute_committee_payout(
-        fees_total,
-        params,
-        recipients,
-        proposer_index,
-        ack_distances,
-    )?;
-    Ok(set.payout_root())
+#[inline]
+pub fn popcount_u64(x: u64) -> u8 {
+    x.count_ones() as u8
 }
 
 impl core::fmt::Display for ConsensusError {
@@ -155,28 +44,34 @@ impl core::fmt::Display for ConsensusError {
 impl std::error::Error for ConsensusError {}
 
 #[inline]
-pub fn finality_threshold(k: u8) -> u8 {
-    // T = floor(2k/3) + 1
-    ((2 * k) / 3) + 1
-}
-
-#[inline]
-pub fn is_final(popcount: u8, k: u8) -> bool {
-    popcount >= finality_threshold(k)
-}
-
-#[inline]
-pub fn popcount_u64(x: u64) -> u8 {
-    x.count_ones() as u8
-}
-
-#[inline]
 pub fn set_bit(mask: u64, index: u8) -> Result<u64, ConsensusError> {
     if index >= 64 {
         return Err(ConsensusError::IndexOutOfRange);
     }
     let bit = 1u64 << (index as u64);
     Ok(mask | bit)
+}
+
+/// Prüft uhrfrei, ob zwischen `minted_at` und `current` mindestens `threshold` Anker vergangen sind.
+#[inline]
+pub fn maturity_reached(current: AnchorIndex, minted_at: AnchorIndex, threshold: u64) -> bool {
+    current.saturating_sub(minted_at) >= threshold
+}
+
+/// Liefert die Maturity-Stufe (0..=3) relativ zu L1/L2/L3 Schwellen.
+/// 0 = < L1, 1 = ≥L1, 2 = ≥L2, 3 = ≥L3
+#[inline]
+pub fn maturity_level(current: AnchorIndex, minted_at: AnchorIndex) -> u8 {
+    let d = current.saturating_sub(minted_at);
+    if d >= consts::MATURITY_L3 {
+        3
+    } else if d >= consts::MATURITY_L2 {
+        2
+    } else if d >= consts::MATURITY_L1 {
+        1
+    } else {
+        0
+    }
 }
 
 /// Fee-Split Parameter in Basispunkten (Summe = 10_000)
@@ -393,6 +288,125 @@ pub fn compute_attestor_payout(
         }
     }
     Ok(PayoutSet { entries })
+}
+
+/// Vereint Committee- und Attestor-Payouts und gibt die finale Payout-Root zurück.
+pub fn compute_total_payout_root(
+    fees_total: Amount,
+    params: &FeeSplitParams,
+    recipients: &[[u8; 32]],
+    proposer_index: usize,
+    ack_distances: &[Option<u8>],
+    attestors: &[[u8; 32]],
+) -> Result<pc_crypto::Hash32, ConsensusError> {
+    let committee = compute_committee_payout(
+        fees_total,
+        params,
+        recipients,
+        proposer_index,
+        ack_distances,
+    )?;
+    let att = compute_attestor_payout(fees_total, params, attestors)?;
+    let mut entries = committee.entries;
+    entries.extend_from_slice(&att.entries);
+    let set = PayoutSet { entries };
+    Ok(set.payout_root())
+}
+
+/// Liefert pro Seat (0..k-1) die minimale Ack-Distanz (in Kanten) vom gegebenen ack_id
+/// zu irgendeinem Anker dieses Seats innerhalb der übergebenen Header-Menge.
+/// Distanz 1 entspricht direktem Parent; Distanz 0 (ack selbst) wird nicht gewertet.
+pub fn compute_ack_distances_for_seats(
+    ack_id: AnchorId,
+    headers: &[AnchorHeader],
+    k: u8,
+    d_max: u8,
+) -> Vec<Option<u8>> {
+    use std::collections::{HashMap, HashSet, VecDeque};
+    let mut out: Vec<Option<u8>> = vec![None; k as usize];
+    if k == 0 || headers.is_empty() {
+        return out;
+    }
+    let mut id_to_idx: HashMap<AnchorId, usize> = HashMap::with_capacity(headers.len());
+    for (i, h) in headers.iter().enumerate() {
+        let hid = AnchorId(h.id_digest());
+        id_to_idx.insert(hid, i);
+    }
+    let mut visited: HashSet<AnchorId> = HashSet::new();
+    let mut dist: HashMap<AnchorId, u8> = HashMap::new();
+    let mut q: VecDeque<AnchorId> = VecDeque::new();
+    q.push_back(ack_id);
+    visited.insert(ack_id);
+    dist.insert(ack_id, 0);
+    while let Some(cur) = q.pop_front() {
+        let cur_d = *dist.get(&cur).unwrap_or(&0);
+        if let Some(&idx) = id_to_idx.get(&cur) {
+            if let Some(h) = headers.get(idx) {
+                if cur_d >= 1 {
+                    let seat = h.creator_index as usize;
+                    if seat < (k as usize) {
+                        if let Some(slot) = out.get_mut(seat) {
+                            match slot {
+                                None => *slot = Some(cur_d),
+                                Some(prev) => {
+                                    if cur_d < *prev {
+                                        *slot = Some(cur_d);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if cur_d < d_max {
+                    let plen = h.parents.len as usize;
+                    for pid in h.parents.ids.iter().take(plen) {
+                        let pid = *pid;
+                        if !visited.contains(&pid) {
+                            visited.insert(pid);
+                            dist.insert(pid, cur_d.saturating_add(1));
+                            q.push_back(pid);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Wrapper: berechnet Ack-Distanzen aus Headern und erzeugt daraus das Committee-Payout
+pub fn compute_committee_payout_from_headers(
+    fees_total: Amount,
+    params: &FeeSplitParams,
+    recipients: &[[u8; 32]],
+    proposer_index: usize,
+    ack_id: AnchorId,
+    headers: &[AnchorHeader],
+    k: u8,
+) -> Result<PayoutSet, ConsensusError> {
+    if recipients.len() != k as usize {
+        return Err(ConsensusError::InvalidParams);
+    }
+    let dists = compute_ack_distances_for_seats(ack_id, headers, k, params.d_max);
+    compute_committee_payout(fees_total, params, recipients, proposer_index, &dists)
+}
+
+/// Convenience: Liefert direkt die Merkle-Root des Committee-Payouts
+pub fn committee_payout_root(
+    fees_total: Amount,
+    params: &FeeSplitParams,
+    recipients: &[[u8; 32]],
+    proposer_index: usize,
+    ack_distances: &[Option<u8>],
+) -> Result<pc_crypto::Hash32, ConsensusError> {
+    let set = compute_committee_payout(
+        fees_total,
+        params,
+        recipients,
+        proposer_index,
+        ack_distances,
+    )?;
+    Ok(set.payout_root())
 }
 
 /// Einfache in-memory Anker-Graph Struktur für Insert/Lookup und Ack-Distanzen
@@ -1068,6 +1082,44 @@ mod tests {
         let via_eng = eng.ack_distances(pc_types::AnchorId(id_c));
 
         assert_eq!(via_fn, via_eng);
+    }
+
+    #[test]
+    fn maturity_thresholds_boundaries() {
+        let m0: AnchorIndex = 1_000_000;
+        // Unter L1
+        assert!(!maturity_reached(
+            m0 + consts::MATURITY_L1 - 1,
+            m0,
+            consts::MATURITY_L1
+        ));
+        // Genau L1
+        assert!(maturity_reached(
+            m0 + consts::MATURITY_L1,
+            m0,
+            consts::MATURITY_L1
+        ));
+        // L2 und L3
+        assert!(maturity_reached(
+            m0 + consts::MATURITY_L2,
+            m0,
+            consts::MATURITY_L2
+        ));
+        assert!(maturity_reached(
+            m0 + consts::MATURITY_L3,
+            m0,
+            consts::MATURITY_L3
+        ));
+    }
+
+    #[test]
+    fn maturity_level_increments() {
+        let m0: AnchorIndex = 10_000;
+        assert_eq!(maturity_level(m0, m0), 0);
+        assert_eq!(maturity_level(m0 + consts::MATURITY_L1 - 1, m0), 0);
+        assert_eq!(maturity_level(m0 + consts::MATURITY_L1, m0), 1);
+        assert_eq!(maturity_level(m0 + consts::MATURITY_L2, m0), 2);
+        assert_eq!(maturity_level(m0 + consts::MATURITY_L3, m0), 3);
     }
 
     #[test]

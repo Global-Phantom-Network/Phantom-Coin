@@ -13,6 +13,11 @@ pub const K_MAX: u8 = 64; // harte Obergrenze: k ≤ 64 (vote_mask passt in u64)
 // Empfohlene Batch-/Payload-Defaults (nicht konsenserzwingend; CLI/Config kann überschreiben)
 pub const DEFAULT_TXS_PER_PAYLOAD: usize = 256; // B≈256 als praxisnahe Default-Obergrenze
 
+// Maturity-Stufen (globaler Anchor-Index; uhrfrei)
+pub const MATURITY_L1: u64 = 50_000;
+pub const MATURITY_L2: u64 = 100_000;
+pub const MATURITY_L3: u64 = 200_000;
+
 // Fee-Split (Basispunkte; Summe = 10_000)
 pub const P_BASE_BP: u16 = 6500; // Basis-Anteil (gleichmäßig auf k Seats)
 pub const P_PROP_BP: u16 = 1000; // Proposer-Anteil
