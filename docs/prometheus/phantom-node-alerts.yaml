@@ -14,7 +14,7 @@ groups:
             Instanz {{ $labels.instance }} mit hoher Header-Miss-Rate.
             Hit-Rate = hits/(hits+misses) ist niedrig → Cache-Kapazität erhöhen oder Datenlokalität prüfen.
             Aktueller Wert: {{ $value | printf "%.2f" }}
-          runbook_url: https://github.com/phantom-labs/phantom-coin/blob/main/README.md#node-cache-lru
+          runbook_url: https://github.com/Global-Phantom-Network/Phantom-Coin
 
       - alert: PhantomNodeHighHeaderMissRateCritical
         expr: |
@@ -29,7 +29,7 @@ groups:
             Instanz {{ $labels.instance }} mit sehr hoher Header-Miss-Rate. Starker IO-Druck zu erwarten.
             Prüfe Kapazität `[node.cache].header_cap`, Hotset-Größe und Workload.
             Aktueller Wert: {{ $value | printf "%.2f" }}
-          runbook_url: https://github.com/phantom-labs/phantom-coin/blob/main/README.md#node-cache-lru
+          runbook_url: https://github.com/Global-Phantom-Network/Phantom-Coin
 
       - alert: PhantomNodeHighPayloadMissRateWarning
         expr: |
@@ -72,7 +72,7 @@ groups:
           description: |
             Instanz {{ $labels.instance }} hat erhöhte Header-Read-Latenzen. Prüfe Cache-Hit-Rate und Storage.
             Aktueller p95: {{ $value | printf "%.3f s" }}
-          runbook_url: https://github.com/phantom-labs/phantom-coin/blob/main/README.md#metriken-prometheus
+          runbook_url: https://github.com/Global-Phantom-Network/Phantom-Coin
 
       - alert: PhantomNodeStoreHeaderReadP95HighCritical
         expr: |
@@ -85,7 +85,7 @@ groups:
           description: |
             Instanz {{ $labels.instance }} mit sehr hohen Header-Read-Latenzen. IO-Subsystem/oder Cache prüfen.
             Aktueller p95: {{ $value | printf "%.3f s" }}
-          runbook_url: https://github.com/phantom-labs/phantom-coin/blob/main/README.md#metriken-prometheus
+          runbook_url: https://github.com/Global-Phantom-Network/Phantom-Coin
 
       - alert: PhantomNodeStorePayloadReadP95HighWarning
         expr: |
@@ -111,7 +111,7 @@ groups:
           description: |
             Instanz {{ $labels.instance }} mit sehr hohen Payload-Read-Latenzen. IO-Subsystem/oder Cache prüfen.
             Aktueller p95: {{ $value | printf "%.3f s" }}
-          runbook_url: https://github.com/phantom-labs/phantom-coin/blob/main/README.md#metriken-prometheus
+          runbook_url: https://github.com/Global-Phantom-Network/Phantom-Coin
 
       - alert: PhantomNodePersistErrors
         expr: |
@@ -124,7 +124,7 @@ groups:
           description: |
             Instanz {{ $labels.instance }} meldet Persist-Fehler.
             Bitte Logs prüfen und Dateisystem/FSync-Konfiguration verifizieren.
-          runbook_url: https://github.com/phantom-labs/phantom-coin/blob/main/README.md#persistenz
+          runbook_url: https://github.com/Global-Phantom-Network/Phantom-Coin
 
       - alert: PhantomNodeCacheIneffective
         expr: |
@@ -143,7 +143,7 @@ groups:
           description: |
             Instanz {{ $labels.instance }}: Sehr niedrige Hit-Rate trotz messbarer Read-Last.
             Prüfe Kapazitäten, Datenlokalität und Workload-Muster (z. B. großer Streubesitz).
-          runbook_url: https://github.com/phantom-labs/phantom-coin/blob/main/docs/PHANTOMCOIN_TODO_PLAN.md#tuning-guidelines-node-cache--store-io
+          runbook_url: https://github.com/Global-Phantom-Network/Phantom-Coin
 
   - name: phantom-node-mempool
     rules:
