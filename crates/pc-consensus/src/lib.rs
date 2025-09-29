@@ -9,7 +9,7 @@
     clippy::indexing_slicing
 )]
 
-use pc_types::{Amount, PayoutEntry, PayoutSet, AnchorId, AnchorHeader};
+use pc_types::{Amount, AnchorHeader, AnchorId, PayoutEntry, PayoutSet};
 pub mod consts;
 
 #[derive(Debug)]
@@ -19,19 +19,27 @@ pub enum ConsensusError {
 }
 
 impl Default for AnchorGraph {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// Vereint Committee- und Attestor-Payouts und gibt die finale Payout-Root zurück.
 pub fn compute_total_payout_root(
     fees_total: Amount,
     params: &FeeSplitParams,
-    recipients: &[[u8;32]],
+    recipients: &[[u8; 32]],
     proposer_index: usize,
     ack_distances: &[Option<u8>],
-    attestors: &[[u8;32]],
+    attestors: &[[u8; 32]],
 ) -> Result<pc_crypto::Hash32, ConsensusError> {
-    let committee = compute_committee_payout(fees_total, params, recipients, proposer_index, ack_distances)?;
+    let committee = compute_committee_payout(
+        fees_total,
+        params,
+        recipients,
+        proposer_index,
+        ack_distances,
+    )?;
     let att = compute_attestor_payout(fees_total, params, attestors)?;
     let mut entries = committee.entries;
     entries.extend_from_slice(&att.entries);
@@ -50,7 +58,9 @@ pub fn compute_ack_distances_for_seats(
 ) -> Vec<Option<u8>> {
     use std::collections::{HashMap, HashSet, VecDeque};
     let mut out: Vec<Option<u8>> = vec![None; k as usize];
-    if k == 0 || headers.is_empty() { return out; }
+    if k == 0 || headers.is_empty() {
+        return out;
+    }
     let mut id_to_idx: HashMap<AnchorId, usize> = HashMap::with_capacity(headers.len());
     for (i, h) in headers.iter().enumerate() {
         let hid = AnchorId(h.id_digest());
@@ -72,7 +82,11 @@ pub fn compute_ack_distances_for_seats(
                         if let Some(slot) = out.get_mut(seat) {
                             match slot {
                                 None => *slot = Some(cur_d),
-                                Some(prev) => if cur_d < *prev { *slot = Some(cur_d); }
+                                Some(prev) => {
+                                    if cur_d < *prev {
+                                        *slot = Some(cur_d);
+                                    }
+                                }
                             }
                         }
                     }
@@ -98,13 +112,15 @@ pub fn compute_ack_distances_for_seats(
 pub fn compute_committee_payout_from_headers(
     fees_total: Amount,
     params: &FeeSplitParams,
-    recipients: &[[u8;32]],
+    recipients: &[[u8; 32]],
     proposer_index: usize,
     ack_id: AnchorId,
     headers: &[AnchorHeader],
     k: u8,
 ) -> Result<PayoutSet, ConsensusError> {
-    if recipients.len() != k as usize { return Err(ConsensusError::InvalidParams); }
+    if recipients.len() != k as usize {
+        return Err(ConsensusError::InvalidParams);
+    }
     let dists = compute_ack_distances_for_seats(ack_id, headers, k, params.d_max);
     compute_committee_payout(fees_total, params, recipients, proposer_index, &dists)
 }
@@ -113,11 +129,17 @@ pub fn compute_committee_payout_from_headers(
 pub fn committee_payout_root(
     fees_total: Amount,
     params: &FeeSplitParams,
-    recipients: &[[u8;32]],
+    recipients: &[[u8; 32]],
     proposer_index: usize,
     ack_distances: &[Option<u8>],
 ) -> Result<pc_crypto::Hash32, ConsensusError> {
-    let set = compute_committee_payout(fees_total, params, recipients, proposer_index, ack_distances)?;
+    let set = compute_committee_payout(
+        fees_total,
+        params,
+        recipients,
+        proposer_index,
+        ack_distances,
+    )?;
     Ok(set.payout_root())
 }
 
@@ -139,14 +161,20 @@ pub fn finality_threshold(k: u8) -> u8 {
 }
 
 #[inline]
-pub fn is_final(popcount: u8, k: u8) -> bool { popcount >= finality_threshold(k) }
+pub fn is_final(popcount: u8, k: u8) -> bool {
+    popcount >= finality_threshold(k)
+}
 
 #[inline]
-pub fn popcount_u64(x: u64) -> u8 { x.count_ones() as u8 }
+pub fn popcount_u64(x: u64) -> u8 {
+    x.count_ones() as u8
+}
 
 #[inline]
 pub fn set_bit(mask: u64, index: u8) -> Result<u64, ConsensusError> {
-    if index >= 64 { return Err(ConsensusError::IndexOutOfRange); }
+    if index >= 64 {
+        return Err(ConsensusError::IndexOutOfRange);
+    }
     let bit = 1u64 << (index as u64);
     Ok(mask | bit)
 }
@@ -169,13 +197,21 @@ impl FeeSplitParams {
             + (self.p_prop_bp as u32)
             + (self.p_perf_bp as u32)
             + (self.p_att_bp as u32);
-        if sum != 10_000 { return Err(ConsensusError::InvalidParams); }
-        if self.d_max as usize != self.perf_weights.len() { return Err(ConsensusError::InvalidParams); }
-        if self.perf_weights.is_empty() { return Err(ConsensusError::InvalidParams); }
+        if sum != 10_000 {
+            return Err(ConsensusError::InvalidParams);
+        }
+        if self.d_max as usize != self.perf_weights.len() {
+            return Err(ConsensusError::InvalidParams);
+        }
+        if self.perf_weights.is_empty() {
+            return Err(ConsensusError::InvalidParams);
+        }
         // Monoton fallend (sicher ohne Indexing)
         for w in self.perf_weights.windows(2) {
             if let [a, b] = w {
-                if a < b { return Err(ConsensusError::InvalidParams); }
+                if a < b {
+                    return Err(ConsensusError::InvalidParams);
+                }
             }
         }
         Ok(())
@@ -189,7 +225,14 @@ impl FeeSplitParams {
         let p_att_bp = consts::P_ATT_BP;
         let d_max = consts::D_MAX;
         let w = consts::perf_weights_recommended();
-        Self { p_base_bp, p_prop_bp, p_perf_bp, p_att_bp, d_max, perf_weights: w }
+        Self {
+            p_base_bp,
+            p_prop_bp,
+            p_perf_bp,
+            p_att_bp,
+            d_max,
+            perf_weights: w,
+        }
     }
 }
 
@@ -198,17 +241,21 @@ fn split_bp(total: Amount, bp: u16) -> Amount {
     (total / 10_000) * (bp as u64) + ((total % 10_000) * (bp as u64)) / 10_000
 }
 
-fn distribute_equal(total: Amount, recipients: &[[u8;32]]) -> Vec<Amount> {
+fn distribute_equal(total: Amount, recipients: &[[u8; 32]]) -> Vec<Amount> {
     let n = recipients.len() as u64;
-    if n == 0 { return Vec::new(); }
+    if n == 0 {
+        return Vec::new();
+    }
     let base = total / n;
     let mut rem = total % n;
     // deterministisch nach recipient_id verteilen (aufsteigend)
-    let mut idxs: Vec<(usize, &[u8;32])> = recipients.iter().enumerate().collect();
+    let mut idxs: Vec<(usize, &[u8; 32])> = recipients.iter().enumerate().collect();
     idxs.sort_by(|a, b| a.1.cmp(b.1));
     let mut out = vec![base; recipients.len()];
     for (i, _) in idxs {
-        if rem == 0 { break; }
+        if rem == 0 {
+            break;
+        }
         if let Some(slot) = out.get_mut(i) {
             *slot = slot.saturating_add(1);
         }
@@ -217,12 +264,18 @@ fn distribute_equal(total: Amount, recipients: &[[u8;32]]) -> Vec<Amount> {
     out
 }
 
-fn distribute_by_weights(total: Amount, recipients: &[[u8;32]], weights: &[u64]) -> Vec<Amount> {
+fn distribute_by_weights(total: Amount, recipients: &[[u8; 32]], weights: &[u64]) -> Vec<Amount> {
     let n = recipients.len();
-    if n == 0 { return Vec::new(); }
+    if n == 0 {
+        return Vec::new();
+    }
     let mut sum_w: u128 = 0;
-    for &w in weights { sum_w += w as u128; }
-    if sum_w == 0 { return vec![0u64; n]; }
+    for &w in weights {
+        sum_w += w as u128;
+    }
+    if sum_w == 0 {
+        return vec![0u64; n];
+    }
     let mut shares: Vec<Amount> = Vec::with_capacity(n);
     let mut acc: u128 = 0;
     for &w in weights {
@@ -232,10 +285,12 @@ fn distribute_by_weights(total: Amount, recipients: &[[u8;32]], weights: &[u64])
     }
     let mut rem = (total as u128).saturating_sub(acc) as u64;
     // remainder deterministisch nach recipient_id verteilen
-    let mut idxs: Vec<(usize, &[u8;32])> = recipients.iter().enumerate().collect();
+    let mut idxs: Vec<(usize, &[u8; 32])> = recipients.iter().enumerate().collect();
     idxs.sort_by(|a, b| a.1.cmp(b.1));
     for (i, _) in idxs {
-        if rem == 0 { break; }
+        if rem == 0 {
+            break;
+        }
         if let Some(slot) = shares.get_mut(i) {
             *slot = slot.saturating_add(1);
         }
@@ -250,13 +305,17 @@ fn distribute_by_weights(total: Amount, recipients: &[[u8;32]], weights: &[u64])
 pub fn compute_committee_payout(
     fees_total: Amount,
     params: &FeeSplitParams,
-    recipients: &[[u8;32]],
+    recipients: &[[u8; 32]],
     proposer_index: usize,
     ack_distances: &[Option<u8>],
 ) -> Result<PayoutSet, ConsensusError> {
     params.validate()?;
-    if recipients.len() != ack_distances.len() { return Err(ConsensusError::InvalidParams); }
-    if proposer_index >= recipients.len() { return Err(ConsensusError::InvalidParams); }
+    if recipients.len() != ack_distances.len() {
+        return Err(ConsensusError::InvalidParams);
+    }
+    if proposer_index >= recipients.len() {
+        return Err(ConsensusError::InvalidParams);
+    }
 
     let base_pot = split_bp(fees_total, params.p_base_bp);
     let prop_pot = split_bp(fees_total, params.p_prop_bp);
@@ -269,8 +328,13 @@ pub fn compute_committee_payout(
     let mut entries: Vec<PayoutEntry> = Vec::new();
     if prop_pot > 0 {
         if let Some(rcpt) = recipients.get(proposer_index) {
-            entries.push(PayoutEntry { recipient_id: *rcpt, amount: prop_pot });
-        } else { return Err(ConsensusError::InvalidParams); }
+            entries.push(PayoutEntry {
+                recipient_id: *rcpt,
+                amount: prop_pot,
+            });
+        } else {
+            return Err(ConsensusError::InvalidParams);
+        }
     }
 
     // Performance nach Gewichten
@@ -288,13 +352,23 @@ pub fn compute_committee_payout(
         }
         let perf_shares = distribute_by_weights(perf_pot, recipients, &w);
         for (amt, rcpt) in perf_shares.iter().zip(recipients.iter()) {
-            if *amt > 0 { entries.push(PayoutEntry { recipient_id: *rcpt, amount: *amt }); }
+            if *amt > 0 {
+                entries.push(PayoutEntry {
+                    recipient_id: *rcpt,
+                    amount: *amt,
+                });
+            }
         }
     }
 
     // Basis hinzulegen
     for (amt, rcpt) in base_shares.iter().zip(recipients.iter()) {
-        if *amt > 0 { entries.push(PayoutEntry { recipient_id: *rcpt, amount: *amt }); }
+        if *amt > 0 {
+            entries.push(PayoutEntry {
+                recipient_id: *rcpt,
+                amount: *amt,
+            });
+        }
     }
 
     Ok(PayoutSet { entries })
@@ -304,14 +378,19 @@ pub fn compute_committee_payout(
 pub fn compute_attestor_payout(
     fees_total: Amount,
     params: &FeeSplitParams,
-    attestors: &[[u8;32]],
+    attestors: &[[u8; 32]],
 ) -> Result<PayoutSet, ConsensusError> {
     params.validate()?;
     let att_pot = split_bp(fees_total, params.p_att_bp);
     let shares = distribute_equal(att_pot, attestors);
     let mut entries = Vec::new();
     for (amt, &rcpt) in shares.iter().zip(attestors.iter()) {
-        if *amt > 0 { entries.push(PayoutEntry { recipient_id: rcpt, amount: *amt }); }
+        if *amt > 0 {
+            entries.push(PayoutEntry {
+                recipient_id: rcpt,
+                amount: *amt,
+            });
+        }
     }
     Ok(PayoutSet { entries })
 }
@@ -322,9 +401,17 @@ pub struct AnchorGraph {
 }
 
 impl AnchorGraph {
-    pub fn new() -> Self { Self { map: std::collections::HashMap::new() } }
-    pub fn len(&self) -> usize { self.map.len() }
-    pub fn is_empty(&self) -> bool { self.map.is_empty() }
+    pub fn new() -> Self {
+        Self {
+            map: std::collections::HashMap::new(),
+        }
+    }
+    pub fn len(&self) -> usize {
+        self.map.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
 
     /// Fügt einen Header ein und gibt dessen berechnete AnchorId zurück
     pub fn insert(&mut self, header: AnchorHeader) -> AnchorId {
@@ -333,14 +420,22 @@ impl AnchorGraph {
         id
     }
 
-    pub fn contains(&self, id: &AnchorId) -> bool { self.map.contains_key(id) }
-    pub fn get(&self, id: &AnchorId) -> Option<&AnchorHeader> { self.map.get(id) }
+    pub fn contains(&self, id: &AnchorId) -> bool {
+        self.map.contains_key(id)
+    }
+    pub fn get(&self, id: &AnchorId) -> Option<&AnchorHeader> {
+        self.map.get(id)
+    }
 
     /// Berechnet Ack-Distanzen über Eltern-Kanten (BFS), Distanz 1 = direkter Parent, 0=ack selbst (nicht gewertet)
     pub fn compute_ack_distances(&self, ack_id: AnchorId, k: u8, d_max: u8) -> Vec<Option<u8>> {
         let mut out: Vec<Option<u8>> = vec![None; k as usize];
-        if k == 0 { return out; }
-        if !self.map.contains_key(&ack_id) { return out; }
+        if k == 0 {
+            return out;
+        }
+        if !self.map.contains_key(&ack_id) {
+            return out;
+        }
         use std::collections::{HashSet, VecDeque};
         let mut visited: HashSet<AnchorId> = HashSet::new();
         let mut dist: std::collections::HashMap<AnchorId, u8> = std::collections::HashMap::new();
@@ -357,7 +452,11 @@ impl AnchorGraph {
                         if let Some(slot) = out.get_mut(seat) {
                             match slot {
                                 None => *slot = Some(cur_d),
-                                Some(prev) => if cur_d < *prev { *slot = Some(cur_d); }
+                                Some(prev) => {
+                                    if cur_d < *prev {
+                                        *slot = Some(cur_d);
+                                    }
+                                }
                             }
                         }
                     }
@@ -386,25 +485,38 @@ pub struct AnchorGraphCache {
 }
 
 impl Default for AnchorGraphCache {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl AnchorGraphCache {
     pub fn new() -> Self {
-        Self { graph: AnchorGraph::new(), ack_cache: std::collections::HashMap::new() }
+        Self {
+            graph: AnchorGraph::new(),
+            ack_cache: std::collections::HashMap::new(),
+        }
     }
-    pub fn len(&self) -> usize { self.graph.len() }
-    pub fn is_empty(&self) -> bool { self.graph.is_empty() }
+    pub fn len(&self) -> usize {
+        self.graph.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.graph.is_empty()
+    }
     pub fn insert(&mut self, header: AnchorHeader) -> AnchorId {
         let id = self.graph.insert(header);
         // Graph hat sich geändert → Cache invalidieren
         self.ack_cache.clear();
         id
     }
-    pub fn contains(&self, id: &AnchorId) -> bool { self.graph.contains(id) }
+    pub fn contains(&self, id: &AnchorId) -> bool {
+        self.graph.contains(id)
+    }
     pub fn compute_ack_distances(&mut self, ack_id: AnchorId, k: u8, d_max: u8) -> Vec<Option<u8>> {
         let key = (ack_id, k, d_max);
-        if let Some(v) = self.ack_cache.get(&key) { return v.clone(); }
+        if let Some(v) = self.ack_cache.get(&key) {
+            return v.clone();
+        }
         let d = self.graph.compute_ack_distances(ack_id, k, d_max);
         self.ack_cache.insert(key, d.clone());
         d
@@ -422,7 +534,12 @@ pub struct ConsensusConfig {
 
 impl ConsensusConfig {
     /// Empfohlene Startkonfiguration mit gegebenem k
-    pub fn recommended(k: u8) -> Self { Self { k, fee_params: FeeSplitParams::recommended() } }
+    pub fn recommended(k: u8) -> Self {
+        Self {
+            k,
+            fee_params: FeeSplitParams::recommended(),
+        }
+    }
 }
 
 /// Konsens-Engine kapselt Graph/Cache und stellt API für Ack-Distanzen,
@@ -433,10 +550,17 @@ pub struct ConsensusEngine {
 }
 
 impl ConsensusEngine {
-    pub fn new(cfg: ConsensusConfig) -> Self { Self { cfg, cache: AnchorGraphCache::new() } }
+    pub fn new(cfg: ConsensusConfig) -> Self {
+        Self {
+            cfg,
+            cache: AnchorGraphCache::new(),
+        }
+    }
 
     /// Fügt einen Header ein und invalidiert intern den Ack-Cache
-    pub fn insert_header(&mut self, header: AnchorHeader) -> AnchorId { self.cache.insert(header) }
+    pub fn insert_header(&mut self, header: AnchorHeader) -> AnchorId {
+        self.cache.insert(header)
+    }
 
     /// Berechne Ack-Distanzen für gegebenes ack_id gemäß Engine-Parametern (k,d_max)
     pub fn ack_distances(&mut self, ack_id: AnchorId) -> Vec<Option<u8>> {
@@ -447,18 +571,26 @@ impl ConsensusEngine {
 
     /// Prüfe Finalität über vote_mask-Popcount gegen Threshold T=floor(2k/3)+1
     /// Erwartet, dass das übergebene vote_mask die Stimmen der k Seats kodiert (u64 reicht k<=64)
-    pub fn is_final_mask(&self, vote_mask: u64) -> bool { is_final(popcount_u64(vote_mask), self.cfg.k) }
+    pub fn is_final_mask(&self, vote_mask: u64) -> bool {
+        is_final(popcount_u64(vote_mask), self.cfg.k)
+    }
 
     /// Erzeugt die Committee-Payout-Root für ein gegebenes Ack (aus Graph) und Seats
     pub fn committee_payout_root_for_ack(
         &mut self,
         fees_total: Amount,
-        recipients: &[[u8;32]],
+        recipients: &[[u8; 32]],
         proposer_index: usize,
         ack_id: AnchorId,
     ) -> Result<pc_crypto::Hash32, ConsensusError> {
         let dists = self.ack_distances(ack_id);
-        committee_payout_root(fees_total, &self.cfg.fee_params, recipients, proposer_index, &dists)
+        committee_payout_root(
+            fees_total,
+            &self.cfg.fee_params,
+            recipients,
+            proposer_index,
+            &dists,
+        )
     }
 }
 
@@ -499,7 +631,10 @@ mod tests {
         let set = compute_committee_payout(fees, &params, &recipients, 1, &dists).unwrap();
         // Summe prüfen
         let sum: u64 = set.entries.iter().map(|e| e.amount).sum();
-        assert_eq!(sum, split_bp(fees, 6500) + split_bp(fees, 1000) + split_bp(fees, 1500));
+        assert_eq!(
+            sum,
+            split_bp(fees, 6500) + split_bp(fees, 1000) + split_bp(fees, 1500)
+        );
     }
 
     #[test]
@@ -524,17 +659,44 @@ mod tests {
     fn anchor_graph_ack_distance_basic() {
         // A <- B <- C (C ist ack_id); Seats: A:0, B:1, C:2
         let parents_a = pc_types::ParentList::default();
-        let a = pc_types::AnchorHeader { version:1, shard_id:0, parents: parents_a, payload_hash:[0u8;32], creator_index:0, vote_mask:0, ack_present:false, ack_id: pc_types::AnchorId([0u8;32]) };
+        let a = pc_types::AnchorHeader {
+            version: 1,
+            shard_id: 0,
+            parents: parents_a,
+            payload_hash: [0u8; 32],
+            creator_index: 0,
+            vote_mask: 0,
+            ack_present: false,
+            ack_id: pc_types::AnchorId([0u8; 32]),
+        };
         let id_a = a.id_digest();
 
         let mut parents_b = pc_types::ParentList::default();
         parents_b.push(pc_types::AnchorId(id_a)).unwrap();
-        let b = pc_types::AnchorHeader { version:1, shard_id:0, parents: parents_b, payload_hash:[1u8;32], creator_index:1, vote_mask:0, ack_present:false, ack_id: pc_types::AnchorId([0u8;32]) };
+        let b = pc_types::AnchorHeader {
+            version: 1,
+            shard_id: 0,
+            parents: parents_b,
+            payload_hash: [1u8; 32],
+            creator_index: 1,
+            vote_mask: 0,
+            ack_present: false,
+            ack_id: pc_types::AnchorId([0u8; 32]),
+        };
         let id_b = b.id_digest();
 
         let mut parents_c = pc_types::ParentList::default();
         parents_c.push(pc_types::AnchorId(id_b)).unwrap();
-        let c = pc_types::AnchorHeader { version:1, shard_id:0, parents: parents_c, payload_hash:[2u8;32], creator_index:2, vote_mask:0, ack_present:false, ack_id: pc_types::AnchorId([0u8;32]) };
+        let c = pc_types::AnchorHeader {
+            version: 1,
+            shard_id: 0,
+            parents: parents_c,
+            payload_hash: [2u8; 32],
+            creator_index: 2,
+            vote_mask: 0,
+            ack_present: false,
+            ack_id: pc_types::AnchorId([0u8; 32]),
+        };
         let id_c = c.id_digest();
 
         let mut g = AnchorGraph::new();
@@ -553,17 +715,44 @@ mod tests {
     fn anchor_graph_cache_basic() {
         // A <- B <- C (C ist ack_id)
         let parents_a = pc_types::ParentList::default();
-        let a = pc_types::AnchorHeader { version:1, shard_id:0, parents: parents_a, payload_hash:[0u8;32], creator_index:0, vote_mask:0, ack_present:false, ack_id: pc_types::AnchorId([0u8;32]) };
+        let a = pc_types::AnchorHeader {
+            version: 1,
+            shard_id: 0,
+            parents: parents_a,
+            payload_hash: [0u8; 32],
+            creator_index: 0,
+            vote_mask: 0,
+            ack_present: false,
+            ack_id: pc_types::AnchorId([0u8; 32]),
+        };
         let id_a = a.id_digest();
 
         let mut parents_b = pc_types::ParentList::default();
         parents_b.push(pc_types::AnchorId(id_a)).unwrap();
-        let b = pc_types::AnchorHeader { version:1, shard_id:0, parents: parents_b, payload_hash:[1u8;32], creator_index:1, vote_mask:0, ack_present:false, ack_id: pc_types::AnchorId([0u8;32]) };
+        let b = pc_types::AnchorHeader {
+            version: 1,
+            shard_id: 0,
+            parents: parents_b,
+            payload_hash: [1u8; 32],
+            creator_index: 1,
+            vote_mask: 0,
+            ack_present: false,
+            ack_id: pc_types::AnchorId([0u8; 32]),
+        };
         let id_b = b.id_digest();
 
         let mut parents_c = pc_types::ParentList::default();
         parents_c.push(pc_types::AnchorId(id_b)).unwrap();
-        let c = pc_types::AnchorHeader { version:1, shard_id:0, parents: parents_c, payload_hash:[2u8;32], creator_index:2, vote_mask:0, ack_present:false, ack_id: pc_types::AnchorId([0u8;32]) };
+        let c = pc_types::AnchorHeader {
+            version: 1,
+            shard_id: 0,
+            parents: parents_c,
+            payload_hash: [2u8; 32],
+            creator_index: 2,
+            vote_mask: 0,
+            ack_present: false,
+            ack_id: pc_types::AnchorId([0u8; 32]),
+        };
         let id_c = c.id_digest();
 
         let mut cache = AnchorGraphCache::new();
@@ -583,17 +772,44 @@ mod tests {
     fn engine_finality_and_ack_distances() {
         // Graph: A <- B <- C (C ist ack_id)
         let parents_a = pc_types::ParentList::default();
-        let a = pc_types::AnchorHeader { version:1, shard_id:0, parents: parents_a, payload_hash:[0u8;32], creator_index:0, vote_mask:0, ack_present:false, ack_id: pc_types::AnchorId([0u8;32]) };
+        let a = pc_types::AnchorHeader {
+            version: 1,
+            shard_id: 0,
+            parents: parents_a,
+            payload_hash: [0u8; 32],
+            creator_index: 0,
+            vote_mask: 0,
+            ack_present: false,
+            ack_id: pc_types::AnchorId([0u8; 32]),
+        };
         let id_a = a.id_digest();
 
         let mut parents_b = pc_types::ParentList::default();
         parents_b.push(pc_types::AnchorId(id_a)).unwrap();
-        let b = pc_types::AnchorHeader { version:1, shard_id:0, parents: parents_b, payload_hash:[1u8;32], creator_index:1, vote_mask:0, ack_present:false, ack_id: pc_types::AnchorId([0u8;32]) };
+        let b = pc_types::AnchorHeader {
+            version: 1,
+            shard_id: 0,
+            parents: parents_b,
+            payload_hash: [1u8; 32],
+            creator_index: 1,
+            vote_mask: 0,
+            ack_present: false,
+            ack_id: pc_types::AnchorId([0u8; 32]),
+        };
         let id_b = b.id_digest();
 
         let mut parents_c = pc_types::ParentList::default();
         parents_c.push(pc_types::AnchorId(id_b)).unwrap();
-        let c = pc_types::AnchorHeader { version:1, shard_id:0, parents: parents_c, payload_hash:[2u8;32], creator_index:2, vote_mask:0, ack_present:false, ack_id: pc_types::AnchorId([0u8;32]) };
+        let c = pc_types::AnchorHeader {
+            version: 1,
+            shard_id: 0,
+            parents: parents_c,
+            payload_hash: [2u8; 32],
+            creator_index: 2,
+            vote_mask: 0,
+            ack_present: false,
+            ack_id: pc_types::AnchorId([0u8; 32]),
+        };
         let id_c = c.id_digest();
 
         let cfg = ConsensusConfig::recommended(3);
@@ -620,17 +836,44 @@ mod tests {
     fn engine_payout_root_matches_direct() {
         // gleicher Graph wie oben
         let parents_a = pc_types::ParentList::default();
-        let a = pc_types::AnchorHeader { version:1, shard_id:0, parents: parents_a, payload_hash:[0u8;32], creator_index:0, vote_mask:0, ack_present:false, ack_id: pc_types::AnchorId([0u8;32]) };
+        let a = pc_types::AnchorHeader {
+            version: 1,
+            shard_id: 0,
+            parents: parents_a,
+            payload_hash: [0u8; 32],
+            creator_index: 0,
+            vote_mask: 0,
+            ack_present: false,
+            ack_id: pc_types::AnchorId([0u8; 32]),
+        };
         let id_a = a.id_digest();
 
         let mut parents_b = pc_types::ParentList::default();
         parents_b.push(pc_types::AnchorId(id_a)).unwrap();
-        let b = pc_types::AnchorHeader { version:1, shard_id:0, parents: parents_b, payload_hash:[1u8;32], creator_index:1, vote_mask:0, ack_present:false, ack_id: pc_types::AnchorId([0u8;32]) };
+        let b = pc_types::AnchorHeader {
+            version: 1,
+            shard_id: 0,
+            parents: parents_b,
+            payload_hash: [1u8; 32],
+            creator_index: 1,
+            vote_mask: 0,
+            ack_present: false,
+            ack_id: pc_types::AnchorId([0u8; 32]),
+        };
         let id_b = b.id_digest();
 
         let mut parents_c = pc_types::ParentList::default();
         parents_c.push(pc_types::AnchorId(id_b)).unwrap();
-        let c = pc_types::AnchorHeader { version:1, shard_id:0, parents: parents_c, payload_hash:[2u8;32], creator_index:2, vote_mask:0, ack_present:false, ack_id: pc_types::AnchorId([0u8;32]) };
+        let c = pc_types::AnchorHeader {
+            version: 1,
+            shard_id: 0,
+            parents: parents_c,
+            payload_hash: [2u8; 32],
+            creator_index: 2,
+            vote_mask: 0,
+            ack_present: false,
+            ack_id: pc_types::AnchorId([0u8; 32]),
+        };
         let id_c = c.id_digest();
 
         let mut eng = ConsensusEngine::new(ConsensusConfig::recommended(3));
@@ -674,10 +917,15 @@ mod tests {
         // Jeder Anteil ist base oder base+1
         let base = total / (recipients.len() as u64);
         let rem = total % (recipients.len() as u64);
-        let mut cnt_base = 0usize; let mut cnt_plus = 0usize;
+        let mut cnt_base = 0usize;
+        let mut cnt_plus = 0usize;
         for &s in &shares {
             assert!(s == base || s == base + 1);
-            if s == base { cnt_base += 1; } else { cnt_plus += 1; }
+            if s == base {
+                cnt_base += 1;
+            } else {
+                cnt_plus += 1;
+            }
         }
         assert_eq!(cnt_plus as u64, rem);
         assert_eq!(cnt_base + cnt_plus, recipients.len());
@@ -723,10 +971,17 @@ mod tests {
         // validate prüft Summe==10_000, Länge==d_max und monotone Gewichte
         p.validate().expect("recommended params invalid");
         // redundante Checks (explizit)
-        let sum = (p.p_base_bp as u32) + (p.p_prop_bp as u32) + (p.p_perf_bp as u32) + (p.p_att_bp as u32);
+        let sum = (p.p_base_bp as u32)
+            + (p.p_prop_bp as u32)
+            + (p.p_perf_bp as u32)
+            + (p.p_att_bp as u32);
         assert_eq!(sum, 10_000);
         assert_eq!(p.perf_weights.len(), p.d_max as usize);
-        for w in p.perf_weights.windows(2) { if let [a,b] = w { assert!(a >= b); } }
+        for w in p.perf_weights.windows(2) {
+            if let [a, b] = w {
+                assert!(a >= b);
+            }
+        }
     }
 
     #[test]
@@ -744,7 +999,7 @@ mod tests {
         let base_pot = split_bp(fees, params.p_base_bp);
         let prop_pot = split_bp(fees, params.p_prop_bp);
         let perf_pot = split_bp(fees, params.p_perf_bp);
-        let att_pot  = split_bp(fees, params.p_att_bp);
+        let att_pot = split_bp(fees, params.p_att_bp);
         let sum_pots = base_pot + prop_pot + perf_pot + att_pot;
         assert_eq!(sum_comm + sum_att, sum_pots);
         // Rundungsverlust über alle Töpfe ist klein und deterministisch (< Anzahl Töpfe)
@@ -756,22 +1011,54 @@ mod tests {
     fn ack_distances_fn_matches_graph() {
         // A <- B <- C (C ack)
         let parents_a = pc_types::ParentList::default();
-        let a = pc_types::AnchorHeader { version:1, shard_id:0, parents: parents_a, payload_hash:[0u8;32], creator_index:0, vote_mask:0, ack_present:false, ack_id: pc_types::AnchorId([0u8;32]) };
+        let a = pc_types::AnchorHeader {
+            version: 1,
+            shard_id: 0,
+            parents: parents_a,
+            payload_hash: [0u8; 32],
+            creator_index: 0,
+            vote_mask: 0,
+            ack_present: false,
+            ack_id: pc_types::AnchorId([0u8; 32]),
+        };
         let id_a = a.id_digest();
 
         let mut parents_b = pc_types::ParentList::default();
         parents_b.push(pc_types::AnchorId(id_a)).unwrap();
-        let b = pc_types::AnchorHeader { version:1, shard_id:0, parents: parents_b, payload_hash:[1u8;32], creator_index:1, vote_mask:0, ack_present:false, ack_id: pc_types::AnchorId([0u8;32]) };
+        let b = pc_types::AnchorHeader {
+            version: 1,
+            shard_id: 0,
+            parents: parents_b,
+            payload_hash: [1u8; 32],
+            creator_index: 1,
+            vote_mask: 0,
+            ack_present: false,
+            ack_id: pc_types::AnchorId([0u8; 32]),
+        };
         let id_b = b.id_digest();
 
         let mut parents_c = pc_types::ParentList::default();
         parents_c.push(pc_types::AnchorId(id_b)).unwrap();
-        let c = pc_types::AnchorHeader { version:1, shard_id:0, parents: parents_c, payload_hash:[2u8;32], creator_index:2, vote_mask:0, ack_present:false, ack_id: pc_types::AnchorId([0u8;32]) };
+        let c = pc_types::AnchorHeader {
+            version: 1,
+            shard_id: 0,
+            parents: parents_c,
+            payload_hash: [2u8; 32],
+            creator_index: 2,
+            vote_mask: 0,
+            ack_present: false,
+            ack_id: pc_types::AnchorId([0u8; 32]),
+        };
         let id_c = c.id_digest();
 
         // compute via helper fn on slice
         let headers = vec![a.clone(), b.clone(), c.clone()];
-        let via_fn = compute_ack_distances_for_seats(pc_types::AnchorId(id_c), &headers, 3, FeeSplitParams::recommended().d_max);
+        let via_fn = compute_ack_distances_for_seats(
+            pc_types::AnchorId(id_c),
+            &headers,
+            3,
+            FeeSplitParams::recommended().d_max,
+        );
 
         // compute via engine
         let mut eng = ConsensusEngine::new(ConsensusConfig::recommended(3));
@@ -781,5 +1068,159 @@ mod tests {
         let via_eng = eng.ack_distances(pc_types::AnchorId(id_c));
 
         assert_eq!(via_fn, via_eng);
+    }
+
+    #[test]
+    fn invalid_params_sum_or_weights_len_fail() {
+        // Summe != 10_000
+        let bad_sum = FeeSplitParams {
+            p_base_bp: 6500,
+            p_prop_bp: 1000,
+            p_perf_bp: 1600, // Summe 10_100
+            p_att_bp: 1000,
+            d_max: 2,
+            perf_weights: vec![10000, 6000],
+        };
+        assert!(bad_sum.validate().is_err());
+
+        // d_max != perf_weights.len()
+        let bad_len = FeeSplitParams {
+            p_base_bp: 6500,
+            p_prop_bp: 1000,
+            p_perf_bp: 1500,
+            p_att_bp: 1000,
+            d_max: 3,
+            perf_weights: vec![10000, 6000], // Länge 2
+        };
+        assert!(bad_len.validate().is_err());
+    }
+
+    #[test]
+    fn committee_payout_mismatch_lengths_and_proposer_index_fail() {
+        let params = FeeSplitParams::recommended();
+        let recipients = [blake3_32(b"a"), blake3_32(b"b")];
+        // Längen-Mismatch: 2 vs 3
+        let dists = [Some(1u8), Some(2u8), None];
+        let fees = 1000u64;
+        assert!(compute_committee_payout(fees, &params, &recipients, 0, &dists).is_err());
+
+        // Proposer-Index außerhalb
+        let dists_ok = [Some(1u8), None];
+        assert!(compute_committee_payout(fees, &params, &recipients, 2, &dists_ok).is_err());
+    }
+
+    #[test]
+    fn committee_payout_from_headers_k_mismatch_recipients_len_fail() {
+        // A <- B <- C (C ack), k=3 aber recipients nur 2
+        let parents_a = pc_types::ParentList::default();
+        let a = pc_types::AnchorHeader {
+            version: 1,
+            shard_id: 0,
+            parents: parents_a,
+            payload_hash: [0u8; 32],
+            creator_index: 0,
+            vote_mask: 0,
+            ack_present: false,
+            ack_id: pc_types::AnchorId([0u8; 32]),
+        };
+        let id_a = a.id_digest();
+
+        let mut parents_b = pc_types::ParentList::default();
+        parents_b.push(pc_types::AnchorId(id_a)).unwrap();
+        let b = pc_types::AnchorHeader {
+            version: 1,
+            shard_id: 0,
+            parents: parents_b,
+            payload_hash: [1u8; 32],
+            creator_index: 1,
+            vote_mask: 0,
+            ack_present: false,
+            ack_id: pc_types::AnchorId([0u8; 32]),
+        };
+        let id_b = b.id_digest();
+
+        let mut parents_c = pc_types::ParentList::default();
+        parents_c.push(pc_types::AnchorId(id_b)).unwrap();
+        let c = pc_types::AnchorHeader {
+            version: 1,
+            shard_id: 0,
+            parents: parents_c,
+            payload_hash: [2u8; 32],
+            creator_index: 2,
+            vote_mask: 0,
+            ack_present: false,
+            ack_id: pc_types::AnchorId([0u8; 32]),
+        };
+        let id_c = c.id_digest();
+
+        let headers = vec![a, b, c];
+        let recipients = [blake3_32(b"a"), blake3_32(b"b")];
+        let fees = 10_000u64;
+        let params = FeeSplitParams::recommended();
+        let res = compute_committee_payout_from_headers(
+            fees,
+            &params,
+            &recipients,
+            0,
+            pc_types::AnchorId(id_c),
+            &headers,
+            3,
+        );
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn engine_committee_payout_root_for_ack_recipients_len_mismatch_fails() {
+        // gleicher Graph wie oben
+        let parents_a = pc_types::ParentList::default();
+        let a = pc_types::AnchorHeader {
+            version: 1,
+            shard_id: 0,
+            parents: parents_a,
+            payload_hash: [0u8; 32],
+            creator_index: 0,
+            vote_mask: 0,
+            ack_present: false,
+            ack_id: pc_types::AnchorId([0u8; 32]),
+        };
+        let id_a = a.id_digest();
+
+        let mut parents_b = pc_types::ParentList::default();
+        parents_b.push(pc_types::AnchorId(id_a)).unwrap();
+        let b = pc_types::AnchorHeader {
+            version: 1,
+            shard_id: 0,
+            parents: parents_b,
+            payload_hash: [1u8; 32],
+            creator_index: 1,
+            vote_mask: 0,
+            ack_present: false,
+            ack_id: pc_types::AnchorId([0u8; 32]),
+        };
+        let id_b = b.id_digest();
+
+        let mut parents_c = pc_types::ParentList::default();
+        parents_c.push(pc_types::AnchorId(id_b)).unwrap();
+        let c = pc_types::AnchorHeader {
+            version: 1,
+            shard_id: 0,
+            parents: parents_c,
+            payload_hash: [2u8; 32],
+            creator_index: 2,
+            vote_mask: 0,
+            ack_present: false,
+            ack_id: pc_types::AnchorId([0u8; 32]),
+        };
+        let id_c = c.id_digest();
+
+        let mut eng = ConsensusEngine::new(ConsensusConfig::recommended(3));
+        eng.insert_header(a);
+        eng.insert_header(b);
+        eng.insert_header(c);
+
+        let recipients = [blake3_32(b"a"), blake3_32(b"b")]; // len 2, k=3
+        let fees = 10_000u64;
+        let res = eng.committee_payout_root_for_ack(fees, &recipients, 0, pc_types::AnchorId(id_c));
+        assert!(res.is_err());
     }
 }

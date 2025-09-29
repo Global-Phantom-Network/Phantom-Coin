@@ -2,7 +2,7 @@
 #![forbid(unsafe_code)]
 use anyhow::{anyhow, Result};
 use pc_codec::{Decodable, Encodable};
-use pc_types::{AnchorHeader, AnchorPayload, payload_merkle_root};
+use pc_types::{payload_merkle_root, AnchorHeader, AnchorPayload};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -27,7 +27,11 @@ impl FileStore {
             Self::fsync_dir(&headers_dir)?;
             Self::fsync_dir(&payloads_dir)?;
         }
-        Ok(Self { headers_dir, payloads_dir, fsync })
+        Ok(Self {
+            headers_dir,
+            payloads_dir,
+            fsync,
+        })
     }
 
     fn fsync_dir(dir: &Path) -> Result<()> {
@@ -41,8 +45,11 @@ impl FileStore {
         let parent = dir;
         let mut tmp = NamedTempFile::new_in(parent)?;
         tmp.write_all(data)?;
-        if fsync { tmp.as_file().sync_all()?; }
-        tmp.persist(&target).map_err(|e| anyhow!("persist failed: {}", e))?;
+        if fsync {
+            tmp.as_file().sync_all()?;
+        }
+        tmp.persist(&target)
+            .map_err(|e| anyhow!("persist failed: {}", e))?;
         if fsync {
             // Ziel-Datei fsyncen und Verzeichnis fsyncen
             let f = OpenOptions::new().read(true).open(&target)?;
@@ -59,7 +66,9 @@ impl FileStore {
         Ok(buf)
     }
 
-    fn hex32(bytes: &[u8; 32]) -> String { hex::encode(bytes) }
+    fn hex32(bytes: &[u8; 32]) -> String {
+        hex::encode(bytes)
+    }
 
     pub fn put_header(&self, h: &AnchorHeader) -> Result<[u8; 32]> {
         let id = h.id_digest();
@@ -71,12 +80,16 @@ impl FileStore {
     }
 
     pub fn has_header(&self, id: &[u8; 32]) -> bool {
-        self.headers_dir.join(format!("{}.bin", Self::hex32(id))).exists()
+        self.headers_dir
+            .join(format!("{}.bin", Self::hex32(id)))
+            .exists()
     }
 
     pub fn get_header(&self, id: &[u8; 32]) -> Result<Option<AnchorHeader>> {
         let path = self.headers_dir.join(format!("{}.bin", Self::hex32(id)));
-        if !path.exists() { return Ok(None); }
+        if !path.exists() {
+            return Ok(None);
+        }
         let mut slice = &Self::read_all(&path)?[..];
         let h = AnchorHeader::decode(&mut slice)?;
         Ok(Some(h))
@@ -92,12 +105,16 @@ impl FileStore {
     }
 
     pub fn has_payload(&self, root: &[u8; 32]) -> bool {
-        self.payloads_dir.join(format!("{}.bin", Self::hex32(root))).exists()
+        self.payloads_dir
+            .join(format!("{}.bin", Self::hex32(root)))
+            .exists()
     }
 
     pub fn get_payload(&self, root: &[u8; 32]) -> Result<Option<AnchorPayload>> {
         let path = self.payloads_dir.join(format!("{}.bin", Self::hex32(root)));
-        if !path.exists() { return Ok(None); }
+        if !path.exists() {
+            return Ok(None);
+        }
         let mut slice = &Self::read_all(&path)?[..];
         let p = AnchorPayload::decode(&mut slice)?;
         Ok(Some(p))
@@ -107,23 +124,47 @@ impl FileStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
-    use pc_types::{AnchorHeader, ParentList, AnchorPayload, PayoutSet, PayoutEntry, AnchorId};
     use pc_types::payload_merkle_root;
+    use pc_types::{AnchorHeader, AnchorId, AnchorPayload, ParentList, PayoutEntry, PayoutSet};
+    use tempfile::TempDir;
 
-    fn sample_header(payload_hash: [u8;32]) -> AnchorHeader {
+    fn sample_header(payload_hash: [u8; 32]) -> AnchorHeader {
         let mut parents = ParentList::default();
-        let _ = parents.push(AnchorId([1u8;32]));
-        AnchorHeader { version:1, shard_id: 7, parents, payload_hash, creator_index: 5, vote_mask: 0xABCD, ack_present: false, ack_id: AnchorId([0u8;32]) }
+        let _ = parents.push(AnchorId([1u8; 32]));
+        AnchorHeader {
+            version: 1,
+            shard_id: 7,
+            parents,
+            payload_hash,
+            creator_index: 5,
+            vote_mask: 0xABCD,
+            ack_present: false,
+            ack_id: AnchorId([0u8; 32]),
+        }
     }
 
     fn sample_payload() -> AnchorPayload {
-        let set = PayoutSet { entries: vec![
-            PayoutEntry { recipient_id: [2u8;32], amount: 10 },
-            PayoutEntry { recipient_id: [1u8;32], amount: 5 },
-        ]};
+        let set = PayoutSet {
+            entries: vec![
+                PayoutEntry {
+                    recipient_id: [2u8; 32],
+                    amount: 10,
+                },
+                PayoutEntry {
+                    recipient_id: [1u8; 32],
+                    amount: 5,
+                },
+            ],
+        };
         let pr = set.payout_root();
-        AnchorPayload { version: 1, micro_txs: vec![], mints: vec![], claims: vec![], evidences: vec![], payout_root: pr }
+        AnchorPayload {
+            version: 1,
+            micro_txs: vec![],
+            mints: vec![],
+            claims: vec![],
+            evidences: vec![],
+            payout_root: pr,
+        }
     }
 
     #[test]
@@ -135,7 +176,10 @@ mod tests {
         let h = sample_header(p_root);
         let id = store.put_header(&h).expect("put header");
         assert!(store.has_header(&id));
-        let got = store.get_header(&id).expect("get header").expect("some header");
+        let got = store
+            .get_header(&id)
+            .expect("get header")
+            .expect("some header");
         assert_eq!(h, got);
     }
 
@@ -146,7 +190,10 @@ mod tests {
         let payload = sample_payload();
         let root = store.put_payload(&payload).expect("put payload");
         assert!(store.has_payload(&root));
-        let got = store.get_payload(&root).expect("get payload").expect("some payload");
+        let got = store
+            .get_payload(&root)
+            .expect("get payload")
+            .expect("some payload");
         assert_eq!(payload, got);
     }
 
@@ -159,11 +206,17 @@ mod tests {
         let p_root = payload_merkle_root(&payload);
         let h = sample_header(p_root);
         let id = store.put_header(&h).expect("put header");
-        let header_path = dir.path().join("headers").join(format!("{}.bin", hex::encode(id)));
+        let header_path = dir
+            .path()
+            .join("headers")
+            .join(format!("{}.bin", hex::encode(id)));
         assert!(header_path.exists(), "header file should exist");
         // payload
         let pr = store.put_payload(&payload).expect("put payload");
-        let payload_path = dir.path().join("payloads").join(format!("{}.bin", hex::encode(pr)));
+        let payload_path = dir
+            .path()
+            .join("payloads")
+            .join(format!("{}.bin", hex::encode(pr)));
         assert!(payload_path.exists(), "payload file should exist");
     }
 }

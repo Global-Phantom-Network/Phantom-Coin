@@ -13,7 +13,7 @@ pub const P_PERF_BP: u16 = 1500; // Performance-Topf (nach Ack-Distanz-Gewichten
 pub const P_ATT_BP: u16 = 1000; // Attestor-Topf
 
 // Performance-Gewichtungsparameter
-pub const D_MAX: u8 = 8;           // maximale Ack-Distanz, die gewertet wird
+pub const D_MAX: u8 = 8; // maximale Ack-Distanz, die gewertet wird
 pub const PERF_ALPHA_NUM: u32 = 6; // α = 6/10 = 0.6 (ganzzahlig)
 pub const PERF_ALPHA_DEN: u32 = 10;
 
@@ -25,7 +25,9 @@ pub fn perf_weights_recommended() -> Vec<u32> {
         w.push(cur);
         let next = (cur as u64 * PERF_ALPHA_NUM as u64) / PERF_ALPHA_DEN as u64;
         let mut next_u32 = next as u32;
-        if next_u32 == 0 { next_u32 = 1; }
+        if next_u32 == 0 {
+            next_u32 = 1;
+        }
         cur = next_u32;
     }
     w

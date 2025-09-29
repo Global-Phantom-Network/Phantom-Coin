@@ -54,6 +54,20 @@ phantom-node P2pQuicListen \
 - Optional QUIC certificate export: `--cert_out server.der`
 - Prometheus metrics endpoint: `curl -s http://127.0.0.1:9100/metrics` (see `P2pMetricsServe`)
 
+### Localnet mit Observability (Prometheus + Grafana)
+
+Einfacher lokaler Start (baut falls nötig, erzeugt `genesis.toml`, startet Metriken und Observability):
+
+```bash
+./scripts/start_localnet.sh
+```
+
+- Prometheus: http://localhost:9090
+- Grafana: http://localhost:3000 (admin/admin)
+- Metrics Endpoint: http://127.0.0.1:9100/metrics
+
+Siehe auch `docs/observability/docker-compose.yml`, `docs/prometheus/prometheus.yml`, `docs/grafana/phantom-node-mempool-dashboard.json`.
+
 Serve metrics on a dedicated HTTP endpoint:
 
 ```bash

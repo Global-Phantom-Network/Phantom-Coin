@@ -41,7 +41,9 @@ pub struct DaNode {
 
 impl DaNode {
     pub fn new(cfg: DaConfig) -> Result<Self, DaError> {
-        if cfg.max_chunks == 0 { return Err(DaError::InvalidConfig); }
+        if cfg.max_chunks == 0 {
+            return Err(DaError::InvalidConfig);
+        }
         Ok(Self { _cfg: cfg })
     }
 
@@ -70,15 +72,23 @@ pub mod async_svc {
 
     impl DaService {
         pub async fn attest(&self, hdr: AnchorHeader) -> Result<(), DaError> {
-            self.tx.send(DaCmd::Attest(Box::new(hdr))).await.map_err(|_| DaError::ChannelClosed)
+            self.tx
+                .send(DaCmd::Attest(Box::new(hdr)))
+                .await
+                .map_err(|_| DaError::ChannelClosed)
         }
         pub async fn shutdown(&self) -> Result<(), DaError> {
-            self.tx.send(DaCmd::Shutdown).await.map_err(|_| DaError::ChannelClosed)
+            self.tx
+                .send(DaCmd::Shutdown)
+                .await
+                .map_err(|_| DaError::ChannelClosed)
         }
     }
 
     pub async fn run_da_loop(cfg: DaConfig, mut rx: mpsc::Receiver<DaCmd>) -> Result<(), DaError> {
-        if cfg.max_chunks == 0 { return Err(DaError::InvalidConfig); }
+        if cfg.max_chunks == 0 {
+            return Err(DaError::InvalidConfig);
+        }
         info!(max_chunks = cfg.max_chunks, "da loop started");
         loop {
             tokio::select! {

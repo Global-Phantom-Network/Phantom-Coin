@@ -1,14 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 #![forbid(unsafe_code)]
 
-use std::fs::File;
-use std::io::Write;
 use clap::Parser;
 use pc_codec::Encodable;
-use pc_types::{AnchorHeader, ParentList, AnchorId};
+use pc_types::{AnchorHeader, AnchorId, ParentList};
+use std::fs::File;
+use std::io::Write;
 
 #[derive(Debug, Clone, Parser)]
-#[command(name = "gen_headers", version, about = "Generate Vec<AnchorHeader> in pc-codec format")]
+#[command(
+    name = "gen_headers",
+    version,
+    about = "Generate Vec<AnchorHeader> in pc-codec format"
+)]
 struct Args {
     #[arg(long, default_value = "./test_headers.bin")]
     out: String,

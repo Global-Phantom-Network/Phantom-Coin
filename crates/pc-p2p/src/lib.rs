@@ -54,16 +54,16 @@ pub struct RateLimitConfig {
 
 /// Nachrichtenformate und Codec-Implementierungen für P2P
 pub mod messages {
-    use pc_codec::{Encodable, Decodable, CodecError};
-    use pc_types::{AnchorHeader, AnchorPayload, AnchorId};
+    use pc_codec::{CodecError, Decodable, Encodable};
+    use pc_types::{AnchorHeader, AnchorId, AnchorPayload};
 
     // Top-Level Nachrichtentypen
     #[derive(Clone, Debug, PartialEq, Eq)]
     pub enum P2pMessage {
         HeaderAnnounce(AnchorHeader),
         HeadersInv { ids: Vec<AnchorId> },
-        PayloadInv { roots: Vec<[u8;32]> },
-        TxInv { ids: Vec<[u8;32]> },
+        PayloadInv { roots: Vec<[u8; 32]> },
+        TxInv { ids: Vec<[u8; 32]> },
         Req(ReqMsg),
         Resp(RespMsg),
     }
@@ -71,8 +71,8 @@ pub mod messages {
     #[derive(Clone, Debug, PartialEq, Eq)]
     pub enum ReqMsg {
         GetHeaders { ids: Vec<AnchorId> },
-        GetPayloads { roots: Vec<[u8;32]> },
-        GetTx { ids: Vec<[u8;32]> },
+        GetPayloads { roots: Vec<[u8; 32]> },
+        GetTx { ids: Vec<[u8; 32]> },
     }
 
     #[derive(Clone, Debug, PartialEq, Eq)]
@@ -80,7 +80,7 @@ pub mod messages {
         Headers { headers: Vec<AnchorHeader> },
         Payloads { payloads: Vec<AnchorPayload> },
         Txs { txs: Vec<pc_types::MicroTx> },
-        NotFound { ty: u8, ids: Vec<[u8;32]> }, // ty: 1=headers, 2=payloads
+        NotFound { ty: u8, ids: Vec<[u8; 32]> }, // ty: 1=headers, 2=payloads
     }
 
     // Tags
@@ -103,12 +103,30 @@ pub mod messages {
     impl Encodable for P2pMessage {
         fn encode<W: std::io::Write>(&self, w: &mut W) -> Result<(), CodecError> {
             match self {
-                P2pMessage::HeaderAnnounce(h) => { TAG_HEADER_ANN.encode(w)?; h.encode(w) }
-                P2pMessage::HeadersInv { ids } => { TAG_HEADERS_INV.encode(w)?; ids.encode(w) }
-                P2pMessage::PayloadInv { roots } => { TAG_PAYLOAD_INV.encode(w)?; roots.encode(w) }
-                P2pMessage::TxInv { ids } => { TAG_TX_INV.encode(w)?; ids.encode(w) }
-                P2pMessage::Req(r) => { TAG_REQ.encode(w)?; r.encode(w) }
-                P2pMessage::Resp(r) => { TAG_RESP.encode(w)?; r.encode(w) }
+                P2pMessage::HeaderAnnounce(h) => {
+                    TAG_HEADER_ANN.encode(w)?;
+                    h.encode(w)
+                }
+                P2pMessage::HeadersInv { ids } => {
+                    TAG_HEADERS_INV.encode(w)?;
+                    ids.encode(w)
+                }
+                P2pMessage::PayloadInv { roots } => {
+                    TAG_PAYLOAD_INV.encode(w)?;
+                    roots.encode(w)
+                }
+                P2pMessage::TxInv { ids } => {
+                    TAG_TX_INV.encode(w)?;
+                    ids.encode(w)
+                }
+                P2pMessage::Req(r) => {
+                    TAG_REQ.encode(w)?;
+                    r.encode(w)
+                }
+                P2pMessage::Resp(r) => {
+                    TAG_RESP.encode(w)?;
+                    r.encode(w)
+                }
             }
         }
         fn encoded_len(&self) -> usize {
@@ -128,9 +146,15 @@ pub mod messages {
             let tag = u8::decode(r)?;
             match tag {
                 TAG_HEADER_ANN => Ok(P2pMessage::HeaderAnnounce(AnchorHeader::decode(r)?)),
-                TAG_HEADERS_INV => Ok(P2pMessage::HeadersInv { ids: Vec::<AnchorId>::decode(r)? }),
-                TAG_PAYLOAD_INV => Ok(P2pMessage::PayloadInv { roots: Vec::<[u8;32]>::decode(r)? }),
-                TAG_TX_INV => Ok(P2pMessage::TxInv { ids: Vec::<[u8;32]>::decode(r)? }),
+                TAG_HEADERS_INV => Ok(P2pMessage::HeadersInv {
+                    ids: Vec::<AnchorId>::decode(r)?,
+                }),
+                TAG_PAYLOAD_INV => Ok(P2pMessage::PayloadInv {
+                    roots: Vec::<[u8; 32]>::decode(r)?,
+                }),
+                TAG_TX_INV => Ok(P2pMessage::TxInv {
+                    ids: Vec::<[u8; 32]>::decode(r)?,
+                }),
                 TAG_REQ => Ok(P2pMessage::Req(ReqMsg::decode(r)?)),
                 TAG_RESP => Ok(P2pMessage::Resp(RespMsg::decode(r)?)),
                 _ => Err(CodecError::InvalidTag(tag)),
@@ -141,9 +165,18 @@ pub mod messages {
     impl Encodable for ReqMsg {
         fn encode<W: std::io::Write>(&self, w: &mut W) -> Result<(), CodecError> {
             match self {
-                ReqMsg::GetHeaders { ids } => { REQ_GET_HEADERS.encode(w)?; ids.encode(w) }
-                ReqMsg::GetPayloads { roots } => { REQ_GET_PAYLOADS.encode(w)?; roots.encode(w) }
-                ReqMsg::GetTx { ids } => { REQ_GET_TX.encode(w)?; ids.encode(w) }
+                ReqMsg::GetHeaders { ids } => {
+                    REQ_GET_HEADERS.encode(w)?;
+                    ids.encode(w)
+                }
+                ReqMsg::GetPayloads { roots } => {
+                    REQ_GET_PAYLOADS.encode(w)?;
+                    roots.encode(w)
+                }
+                ReqMsg::GetTx { ids } => {
+                    REQ_GET_TX.encode(w)?;
+                    ids.encode(w)
+                }
             }
         }
         fn encoded_len(&self) -> usize {
@@ -159,9 +192,15 @@ pub mod messages {
         fn decode<R: std::io::Read>(r: &mut R) -> Result<Self, CodecError> {
             let tag = u8::decode(r)?;
             match tag {
-                REQ_GET_HEADERS => Ok(ReqMsg::GetHeaders { ids: Vec::<AnchorId>::decode(r)? }),
-                REQ_GET_PAYLOADS => Ok(ReqMsg::GetPayloads { roots: Vec::<[u8;32]>::decode(r)? }),
-                REQ_GET_TX => Ok(ReqMsg::GetTx { ids: Vec::<[u8;32]>::decode(r)? }),
+                REQ_GET_HEADERS => Ok(ReqMsg::GetHeaders {
+                    ids: Vec::<AnchorId>::decode(r)?,
+                }),
+                REQ_GET_PAYLOADS => Ok(ReqMsg::GetPayloads {
+                    roots: Vec::<[u8; 32]>::decode(r)?,
+                }),
+                REQ_GET_TX => Ok(ReqMsg::GetTx {
+                    ids: Vec::<[u8; 32]>::decode(r)?,
+                }),
                 _ => Err(CodecError::InvalidTag(tag)),
             }
         }
@@ -170,10 +209,23 @@ pub mod messages {
     impl Encodable for RespMsg {
         fn encode<W: std::io::Write>(&self, w: &mut W) -> Result<(), CodecError> {
             match self {
-                RespMsg::Headers { headers } => { RESP_HEADERS.encode(w)?; headers.encode(w) }
-                RespMsg::Payloads { payloads } => { RESP_PAYLOADS.encode(w)?; payloads.encode(w) }
-                RespMsg::Txs { txs } => { RESP_TXS.encode(w)?; txs.encode(w) }
-                RespMsg::NotFound { ty, ids } => { RESP_NOTFOUND.encode(w)?; ty.encode(w)?; ids.encode(w) }
+                RespMsg::Headers { headers } => {
+                    RESP_HEADERS.encode(w)?;
+                    headers.encode(w)
+                }
+                RespMsg::Payloads { payloads } => {
+                    RESP_PAYLOADS.encode(w)?;
+                    payloads.encode(w)
+                }
+                RespMsg::Txs { txs } => {
+                    RESP_TXS.encode(w)?;
+                    txs.encode(w)
+                }
+                RespMsg::NotFound { ty, ids } => {
+                    RESP_NOTFOUND.encode(w)?;
+                    ty.encode(w)?;
+                    ids.encode(w)
+                }
             }
         }
         fn encoded_len(&self) -> usize {
@@ -190,12 +242,18 @@ pub mod messages {
         fn decode<R: std::io::Read>(r: &mut R) -> Result<Self, CodecError> {
             let tag = u8::decode(r)?;
             match tag {
-                RESP_HEADERS => Ok(RespMsg::Headers { headers: Vec::<AnchorHeader>::decode(r)? }),
-                RESP_PAYLOADS => Ok(RespMsg::Payloads { payloads: Vec::<AnchorPayload>::decode(r)? }),
-                RESP_TXS => Ok(RespMsg::Txs { txs: Vec::<pc_types::MicroTx>::decode(r)? }),
+                RESP_HEADERS => Ok(RespMsg::Headers {
+                    headers: Vec::<AnchorHeader>::decode(r)?,
+                }),
+                RESP_PAYLOADS => Ok(RespMsg::Payloads {
+                    payloads: Vec::<AnchorPayload>::decode(r)?,
+                }),
+                RESP_TXS => Ok(RespMsg::Txs {
+                    txs: Vec::<pc_types::MicroTx>::decode(r)?,
+                }),
                 RESP_NOTFOUND => {
                     let ty = u8::decode(r)?;
-                    let ids = Vec::<[u8;32]>::decode(r)?;
+                    let ids = Vec::<[u8; 32]>::decode(r)?;
                     Ok(RespMsg::NotFound { ty, ids })
                 }
                 _ => Err(CodecError::InvalidTag(tag)),
@@ -208,7 +266,9 @@ pub mod messages {
         use super::*;
         use pc_types::ParentList;
 
-        fn rt<T: Encodable + Decodable + core::fmt::Debug + PartialEq>(v: &T) -> Result<T, CodecError> {
+        fn rt<T: Encodable + Decodable + core::fmt::Debug + PartialEq>(
+            v: &T,
+        ) -> Result<T, CodecError> {
             let mut buf = Vec::new();
             v.encode(&mut buf)?;
             let mut slice = &buf[..];
@@ -218,59 +278,102 @@ pub mod messages {
         #[test]
         fn roundtrip_header_announce() {
             let parents = ParentList::default();
-            let hdr = AnchorHeader { version:1, shard_id:0, parents, payload_hash:[0u8;32], creator_index:7, vote_mask:0, ack_present:false, ack_id: AnchorId([0u8;32]) };
+            let hdr = AnchorHeader {
+                version: 1,
+                shard_id: 0,
+                parents,
+                payload_hash: [0u8; 32],
+                creator_index: 7,
+                vote_mask: 0,
+                ack_present: false,
+                ack_id: AnchorId([0u8; 32]),
+            };
             let msg = P2pMessage::HeaderAnnounce(hdr);
             assert_eq!(rt(&msg).ok(), Some(msg));
         }
 
         #[test]
         fn roundtrip_payload_inv() {
-            let msg = P2pMessage::PayloadInv { roots: vec![[1u8;32], [2u8;32]] };
+            let msg = P2pMessage::PayloadInv {
+                roots: vec![[1u8; 32], [2u8; 32]],
+            };
             assert_eq!(rt(&msg).ok(), Some(msg));
         }
 
         #[test]
         fn roundtrip_headers_inv() {
-            let msg = P2pMessage::HeadersInv { ids: vec![AnchorId([1u8;32]), AnchorId([2u8;32])] };
+            let msg = P2pMessage::HeadersInv {
+                ids: vec![AnchorId([1u8; 32]), AnchorId([2u8; 32])],
+            };
             assert_eq!(rt(&msg).ok(), Some(msg));
         }
 
         #[test]
         fn roundtrip_tx_inv() {
-            let msg = P2pMessage::TxInv { ids: vec![[7u8;32], [8u8;32]] };
+            let msg = P2pMessage::TxInv {
+                ids: vec![[7u8; 32], [8u8; 32]],
+            };
             assert_eq!(rt(&msg).ok(), Some(msg));
         }
 
         #[test]
         fn roundtrip_req_resp() {
-            let r1 = ReqMsg::GetHeaders { ids: vec![AnchorId([9u8;32]), AnchorId([7u8;32])] };
+            let r1 = ReqMsg::GetHeaders {
+                ids: vec![AnchorId([9u8; 32]), AnchorId([7u8; 32])],
+            };
             assert_eq!(rt(&r1).ok(), Some(r1.clone()));
 
-            let r2 = ReqMsg::GetPayloads { roots: vec![[3u8;32]] };
+            let r2 = ReqMsg::GetPayloads {
+                roots: vec![[3u8; 32]],
+            };
             assert_eq!(rt(&r2).ok(), Some(r2.clone()));
 
-            let r3 = ReqMsg::GetTx { ids: vec![[4u8;32]] };
+            let r3 = ReqMsg::GetTx {
+                ids: vec![[4u8; 32]],
+            };
             assert_eq!(rt(&r3).ok(), Some(r3.clone()));
 
             let parents = pc_types::ParentList::default();
-            let hdr = AnchorHeader { version:1, shard_id:0, parents, payload_hash:[0u8;32], creator_index:1, vote_mask:0, ack_present:false, ack_id: AnchorId([0u8;32]) };
+            let hdr = AnchorHeader {
+                version: 1,
+                shard_id: 0,
+                parents,
+                payload_hash: [0u8; 32],
+                creator_index: 1,
+                vote_mask: 0,
+                ack_present: false,
+                ack_id: AnchorId([0u8; 32]),
+            };
             let resp1 = RespMsg::Headers { headers: vec![hdr] };
             assert_eq!(rt(&resp1).ok(), Some(resp1.clone()));
 
-            let pl = AnchorPayload { version:1, micro_txs: vec![], mints: vec![], claims: vec![], evidences: vec![], payout_root: [0u8;32] };
+            let pl = AnchorPayload {
+                version: 1,
+                micro_txs: vec![],
+                mints: vec![],
+                claims: vec![],
+                evidences: vec![],
+                payout_root: [0u8; 32],
+            };
             let resp2 = RespMsg::Payloads { payloads: vec![pl] };
             assert_eq!(rt(&resp2).ok(), Some(resp2.clone()));
 
-            let resp3 = RespMsg::NotFound { ty: 2, ids: vec![[4u8;32], [5u8;32]] };
+            let resp3 = RespMsg::NotFound {
+                ty: 2,
+                ids: vec![[4u8; 32], [5u8; 32]],
+            };
             assert_eq!(rt(&resp3).ok(), Some(resp3));
 
-            let tx = pc_types::MicroTx { version:1, inputs: vec![], outputs: vec![] };
+            let tx = pc_types::MicroTx {
+                version: 1,
+                inputs: vec![],
+                outputs: vec![],
+            };
             let resp4 = RespMsg::Txs { txs: vec![tx] };
             assert_eq!(rt(&resp4).ok(), Some(resp4));
         }
     }
 }
-
 
 #[derive(Clone, Debug)]
 pub struct P2pNode {
@@ -279,7 +382,9 @@ pub struct P2pNode {
 
 impl P2pNode {
     pub fn new(cfg: P2pConfig) -> Result<Self, P2pError> {
-        if cfg.max_peers == 0 { return Err(P2pError::InvalidConfig); }
+        if cfg.max_peers == 0 {
+            return Err(P2pError::InvalidConfig);
+        }
         Ok(Self { _cfg: cfg })
     }
 
@@ -290,16 +395,15 @@ impl P2pNode {
 
 #[cfg(all(feature = "async", feature = "quic"))]
 pub mod quic_transport {
-    use super::messages::P2pMessage;
     use super::async_svc::P2pService;
+    use super::messages::P2pMessage;
     use super::P2pError;
-    use pc_codec::{Encodable, Decodable};
-    use quinn::{Endpoint, ServerConfig, ClientConfig, TransportConfig};
+    use pc_codec::{Decodable, Encodable};
+    use quinn::{ClientConfig, Endpoint, ServerConfig, TransportConfig};
     use rustls::{Certificate, PrivateKey, RootCertStore};
     use std::net::SocketAddr;
-    use tokio::sync::mpsc;
     use std::sync::{Arc, Mutex};
-    
+    use tokio::sync::mpsc;
 
     fn encode_msg(msg: &P2pMessage) -> Result<Vec<u8>, P2pError> {
         let mut body = Vec::new();
@@ -313,30 +417,60 @@ pub mod quic_transport {
 
     pub(crate) async fn read_one(mut r: quinn::RecvStream) -> Result<Option<P2pMessage>, P2pError> {
         let mut len_buf = [0u8; 4];
-        if let Err(_e) = r.read_exact(&mut len_buf).await { return Ok(None); }
+        if let Err(_e) = r.read_exact(&mut len_buf).await {
+            return Ok(None);
+        }
         let len = u32::from_be_bytes(len_buf) as usize;
         let mut data = vec![0u8; len];
-        if let Err(_e) = r.read_exact(&mut data).await { return Ok(None); }
+        if let Err(_e) = r.read_exact(&mut data).await {
+            return Ok(None);
+        }
         let mut slice = &data[..];
-        match P2pMessage::decode(&mut slice) { Ok(m) => Ok(Some(m)), Err(_e) => Ok(None) }
+        match P2pMessage::decode(&mut slice) {
+            Ok(m) => Ok(Some(m)),
+            Err(_e) => Ok(None),
+        }
     }
 
     fn make_server_config() -> Result<(ServerConfig, Vec<u8>), P2pError> {
-        let cert = match rcgen::generate_simple_self_signed(vec!["localhost".to_string()]) { Ok(c) => c, Err(_e) => return Err(P2pError::InvalidConfig) };
-        let cert_der = match cert.serialize_der() { Ok(c) => c, Err(_e) => return Err(P2pError::InvalidConfig) };
+        let cert = match rcgen::generate_simple_self_signed(vec!["localhost".to_string()]) {
+            Ok(c) => c,
+            Err(_e) => return Err(P2pError::InvalidConfig),
+        };
+        let cert_der = match cert.serialize_der() {
+            Ok(c) => c,
+            Err(_e) => return Err(P2pError::InvalidConfig),
+        };
         let key_der = cert.serialize_private_key_der();
         let cert_chain = vec![Certificate(cert_der.clone())];
         let key = PrivateKey(key_der);
-        let mut cfg = match ServerConfig::with_single_cert(cert_chain, key) { Ok(c) => c, Err(_e) => return Err(P2pError::InvalidConfig) };
+        let mut cfg = match ServerConfig::with_single_cert(cert_chain, key) {
+            Ok(c) => c,
+            Err(_e) => return Err(P2pError::InvalidConfig),
+        };
         let mut transport = TransportConfig::default();
         transport.keep_alive_interval(Some(std::time::Duration::from_secs(10)));
         cfg.transport = std::sync::Arc::new(transport);
         Ok((cfg, cert_der))
     }
 
-    pub async fn start_server(addr: SocketAddr, svc: P2pService) -> Result<(Endpoint, Vec<u8>, tokio::task::JoinHandle<()>, mpsc::Sender<P2pMessage>), P2pError> {
+    pub async fn start_server(
+        addr: SocketAddr,
+        svc: P2pService,
+    ) -> Result<
+        (
+            Endpoint,
+            Vec<u8>,
+            tokio::task::JoinHandle<()>,
+            mpsc::Sender<P2pMessage>,
+        ),
+        P2pError,
+    > {
         let (server_cfg, cert_der) = make_server_config()?;
-        let endpoint = match Endpoint::server(server_cfg, addr) { Ok(ep) => ep, Err(_e) => return Err(P2pError::InvalidConfig) };
+        let endpoint = match Endpoint::server(server_cfg, addr) {
+            Ok(ep) => ep,
+            Err(_e) => return Err(P2pError::InvalidConfig),
+        };
         let (tx, mut rx) = mpsc::channel::<P2pMessage>(1024);
         let connections: Arc<Mutex<Vec<quinn::Connection>>> = Arc::new(Mutex::new(Vec::new()));
         let ep_clone = endpoint.clone();
@@ -345,7 +479,9 @@ pub mod quic_transport {
         let handle = tokio::spawn(async move {
             while let Some(connecting) = ep_clone.accept().await {
                 if let Ok(new_conn) = connecting.await {
-                    if let Ok(mut guard) = conns_for_accept.lock() { guard.push(new_conn.clone()); }
+                    if let Ok(mut guard) = conns_for_accept.lock() {
+                        guard.push(new_conn.clone());
+                    }
                     let svc2 = svc_clone.clone();
                     let peer = new_conn.remote_address();
                     tokio::spawn(async move {
@@ -361,7 +497,10 @@ pub mod quic_transport {
         let conns_for_broadcast = connections.clone();
         tokio::spawn(async move {
             while let Some(msg) = rx.recv().await {
-                let buf = match encode_msg(&msg) { Ok(b) => b, Err(_)=> continue };
+                let buf = match encode_msg(&msg) {
+                    Ok(b) => b,
+                    Err(_) => continue,
+                };
                 if let Ok(mut guard) = conns_for_broadcast.lock() {
                     guard.retain(|conn| {
                         let buf_vec = buf.clone();
@@ -369,10 +508,17 @@ pub mod quic_transport {
                         tokio::spawn(async move {
                             match c.open_uni().await {
                                 Ok(mut s) => {
-                                    if let Err(_e) = s.write_all(&buf_vec).await { super::async_svc::out_error_inc(); return; }
-                                    if let Err(_e) = s.finish().await { super::async_svc::out_error_inc(); }
+                                    if let Err(_e) = s.write_all(&buf_vec).await {
+                                        super::async_svc::out_error_inc();
+                                        return;
+                                    }
+                                    if let Err(_e) = s.finish().await {
+                                        super::async_svc::out_error_inc();
+                                    }
                                 }
-                                Err(_e) => { super::async_svc::out_error_inc(); }
+                                Err(_e) => {
+                                    super::async_svc::out_error_inc();
+                                }
                             }
                         });
                         true
@@ -385,34 +531,81 @@ pub mod quic_transport {
 
     pub fn client_config_from_cert(cert_der: &[u8]) -> Result<ClientConfig, P2pError> {
         let mut roots = RootCertStore::empty();
-        if roots.add(&Certificate(cert_der.to_vec())).is_err() { return Err(P2pError::InvalidConfig); }
-        let tls = rustls::ClientConfig::builder().with_safe_defaults().with_root_certificates(roots).with_no_client_auth();
+        if roots.add(&Certificate(cert_der.to_vec())).is_err() {
+            return Err(P2pError::InvalidConfig);
+        }
+        let tls = rustls::ClientConfig::builder()
+            .with_safe_defaults()
+            .with_root_certificates(roots)
+            .with_no_client_auth();
         Ok(ClientConfig::new(std::sync::Arc::new(tls)))
     }
 
-    pub async fn connect(addr: SocketAddr, cfg: ClientConfig) -> Result<quinn::Connection, P2pError> {
-        let bind_addr: std::net::SocketAddr = match "0.0.0.0:0".parse() { Ok(a) => a, Err(_e) => return Err(P2pError::InvalidConfig) };
-        let mut endpoint = match Endpoint::client(bind_addr) { Ok(ep) => ep, Err(_e) => return Err(P2pError::InvalidConfig) };
+    pub async fn connect(
+        addr: SocketAddr,
+        cfg: ClientConfig,
+    ) -> Result<quinn::Connection, P2pError> {
+        let bind_addr: std::net::SocketAddr = match "0.0.0.0:0".parse() {
+            Ok(a) => a,
+            Err(_e) => return Err(P2pError::InvalidConfig),
+        };
+        let mut endpoint = match Endpoint::client(bind_addr) {
+            Ok(ep) => ep,
+            Err(_e) => return Err(P2pError::InvalidConfig),
+        };
         endpoint.set_default_client_config(cfg);
-        let connecting = match endpoint.connect(addr, "localhost") { Ok(c) => c, Err(_e) => return Err(P2pError::InvalidConfig) };
-        match connecting.await { Ok(c) => Ok(c), Err(_e) => Err(P2pError::InvalidConfig) }
+        let connecting = match endpoint.connect(addr, "localhost") {
+            Ok(c) => c,
+            Err(_e) => return Err(P2pError::InvalidConfig),
+        };
+        match connecting.await {
+            Ok(c) => Ok(c),
+            Err(_e) => Err(P2pError::InvalidConfig),
+        }
     }
 
-    pub struct QuicClientSink { conn: quinn::Connection }
-    impl QuicClientSink { pub fn new(conn: quinn::Connection) -> Self { Self { conn } } }
+    pub struct QuicClientSink {
+        conn: quinn::Connection,
+    }
+    impl QuicClientSink {
+        pub fn new(conn: quinn::Connection) -> Self {
+            Self { conn }
+        }
+    }
 
     #[async_trait::async_trait]
     impl super::async_svc::OutboundSink for QuicClientSink {
         async fn deliver(&self, msg: P2pMessage) -> Result<(), P2pError> {
-            let buf = match encode_msg(&msg) { Ok(b) => b, Err(e) => { super::async_svc::out_error_inc(); return Err(e); } };
-            let mut s = match self.conn.open_uni().await { Ok(st) => st, Err(_e) => { super::async_svc::out_error_inc(); return Err(P2pError::ChannelClosed); } };
-            if let Err(_e) = s.write_all(&buf).await { super::async_svc::out_error_inc(); return Err(P2pError::ChannelClosed); }
-            if let Err(_e) = s.finish().await { super::async_svc::out_error_inc(); return Err(P2pError::ChannelClosed); }
+            let buf = match encode_msg(&msg) {
+                Ok(b) => b,
+                Err(e) => {
+                    super::async_svc::out_error_inc();
+                    return Err(e);
+                }
+            };
+            let mut s = match self.conn.open_uni().await {
+                Ok(st) => st,
+                Err(_e) => {
+                    super::async_svc::out_error_inc();
+                    return Err(P2pError::ChannelClosed);
+                }
+            };
+            if let Err(_e) = s.write_all(&buf).await {
+                super::async_svc::out_error_inc();
+                return Err(P2pError::ChannelClosed);
+            }
+            if let Err(_e) = s.finish().await {
+                super::async_svc::out_error_inc();
+                return Err(P2pError::ChannelClosed);
+            }
             Ok(())
         }
     }
 
-    pub fn spawn_client_reader(conn: quinn::Connection, svc: P2pService) -> tokio::task::JoinHandle<()> {
+    pub fn spawn_client_reader(
+        conn: quinn::Connection,
+        svc: P2pService,
+    ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             while let Ok(recv) = conn.accept_uni().await {
                 if let Ok(Some(m)) = read_one(recv).await {
@@ -425,32 +618,32 @@ pub mod quic_transport {
 
 #[cfg(feature = "async")]
 pub mod async_svc {
-    use super::*;
     use super::messages::{P2pMessage, ReqMsg, RespMsg};
-    use tokio::sync::mpsc;
-    use tokio::sync::broadcast;
-    use tokio::time::{sleep, Duration};
-    use tracing::{info, warn};
-    use std::collections::HashMap;
-    use pc_types::{AnchorId, AnchorPayload, MicroTx};
+    use super::*;
     use pc_types::digest_microtx;
     use pc_types::payload_merkle_root;
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use std::sync::{OnceLock, Arc};
-    use std::time::Instant;
+    use pc_types::{AnchorId, AnchorPayload, MicroTx};
+    use std::collections::HashMap;
     use std::net::SocketAddr;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Arc, OnceLock};
+    use std::time::Instant;
+    use tokio::sync::broadcast;
+    use tokio::sync::mpsc;
+    use tokio::time::{sleep, Duration};
+    use tracing::{info, warn};
 
     // Optionales Store-Backend-Delegate (z. B. Diskstore). Threadsicher und async-fähig.
     #[async_trait::async_trait]
     pub trait StoreDelegate: Send + Sync {
         async fn insert_header(&self, h: AnchorHeader);
         async fn insert_payload(&self, p: AnchorPayload);
-        async fn has_payload(&self, root: &[u8;32]) -> bool;
-        async fn get_headers(&self, ids: &[AnchorId]) -> (Vec<AnchorHeader>, Vec<[u8;32]>);
-        async fn get_payloads(&self, roots: &[[u8;32]]) -> (Vec<AnchorPayload>, Vec<[u8;32]>);
+        async fn has_payload(&self, root: &[u8; 32]) -> bool;
+        async fn get_headers(&self, ids: &[AnchorId]) -> (Vec<AnchorHeader>, Vec<[u8; 32]>);
+        async fn get_payloads(&self, roots: &[[u8; 32]]) -> (Vec<AnchorPayload>, Vec<[u8; 32]>);
         async fn insert_tx(&self, tx: MicroTx);
-        async fn has_tx(&self, id: &[u8;32]) -> bool;
-        async fn get_txs(&self, ids: &[[u8;32]]) -> (Vec<MicroTx>, Vec<[u8;32]>);
+        async fn has_tx(&self, id: &[u8; 32]) -> bool;
+        async fn get_txs(&self, ids: &[[u8; 32]]) -> (Vec<MicroTx>, Vec<[u8; 32]>);
     }
 
     #[derive(Debug)]
@@ -464,26 +657,50 @@ pub mod async_svc {
     }
 
     #[derive(Clone)]
-    pub struct P2pService { tx: mpsc::Sender<P2pCmd> }
+    pub struct P2pService {
+        tx: mpsc::Sender<P2pCmd>,
+    }
 
     impl P2pService {
         pub async fn announce_header(&self, hdr: AnchorHeader) -> Result<(), P2pError> {
-            self.tx.send(P2pCmd::AnnounceHeader(hdr)).await.map_err(|_| P2pError::ChannelClosed)
+            self.tx
+                .send(P2pCmd::AnnounceHeader(hdr))
+                .await
+                .map_err(|_| P2pError::ChannelClosed)
         }
         pub async fn put_payload(&self, pl: AnchorPayload) -> Result<(), P2pError> {
-            self.tx.send(P2pCmd::PutPayload(pl)).await.map_err(|_| P2pError::ChannelClosed)
+            self.tx
+                .send(P2pCmd::PutPayload(pl))
+                .await
+                .map_err(|_| P2pError::ChannelClosed)
         }
         pub async fn put_tx(&self, tx: MicroTx) -> Result<(), P2pError> {
-            self.tx.send(P2pCmd::PutTx(tx)).await.map_err(|_| P2pError::ChannelClosed)
+            self.tx
+                .send(P2pCmd::PutTx(tx))
+                .await
+                .map_err(|_| P2pError::ChannelClosed)
         }
         pub async fn send_message(&self, msg: P2pMessage) -> Result<(), P2pError> {
-            self.tx.send(P2pCmd::Incoming(msg)).await.map_err(|_| P2pError::ChannelClosed)
+            self.tx
+                .send(P2pCmd::Incoming(msg))
+                .await
+                .map_err(|_| P2pError::ChannelClosed)
         }
-        pub async fn send_message_from(&self, peer: SocketAddr, msg: P2pMessage) -> Result<(), P2pError> {
-            self.tx.send(P2pCmd::IncomingFrom(peer, msg)).await.map_err(|_| P2pError::ChannelClosed)
+        pub async fn send_message_from(
+            &self,
+            peer: SocketAddr,
+            msg: P2pMessage,
+        ) -> Result<(), P2pError> {
+            self.tx
+                .send(P2pCmd::IncomingFrom(peer, msg))
+                .await
+                .map_err(|_| P2pError::ChannelClosed)
         }
         pub async fn shutdown(&self) -> Result<(), P2pError> {
-            self.tx.send(P2pCmd::Shutdown).await.map_err(|_| P2pError::ChannelClosed)
+            self.tx
+                .send(P2pCmd::Shutdown)
+                .await
+                .map_err(|_| P2pError::ChannelClosed)
         }
     }
 
@@ -536,8 +753,12 @@ pub mod async_svc {
     }
 
     // Öffentliche Inkrement-Helfer für andere Module
-    pub fn out_error_inc() { OUT_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed); }
-    pub fn outbox_deq_inc() { OUTBOX_DEQ_TOTAL.fetch_add(1, Ordering::Relaxed); }
+    pub fn out_error_inc() {
+        OUT_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed);
+    }
+    pub fn outbox_deq_inc() {
+        OUTBOX_DEQ_TOTAL.fetch_add(1, Ordering::Relaxed);
+    }
 
     #[derive(Debug, Clone, Copy)]
     pub struct MetricsSnapshot {
@@ -603,12 +824,29 @@ pub mod async_svc {
         IN_HANDLE_SUM_MICROS.fetch_add(micros, Ordering::Relaxed);
         // Buckets in ms thresholds
         let ms = micros as f64 / 1000.0;
-        if ms <= 1.0 { IN_HIST_LE_1MS.fetch_add(1, Ordering::Relaxed); return; }
-        if ms <= 5.0 { IN_HIST_LE_5MS.fetch_add(1, Ordering::Relaxed); return; }
-        if ms <= 10.0 { IN_HIST_LE_10MS.fetch_add(1, Ordering::Relaxed); return; }
-        if ms <= 50.0 { IN_HIST_LE_50MS.fetch_add(1, Ordering::Relaxed); return; }
-        if ms <= 100.0 { IN_HIST_LE_100MS.fetch_add(1, Ordering::Relaxed); return; }
-        if ms <= 500.0 { IN_HIST_LE_500MS.fetch_add(1, Ordering::Relaxed); }
+        if ms <= 1.0 {
+            IN_HIST_LE_1MS.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+        if ms <= 5.0 {
+            IN_HIST_LE_5MS.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+        if ms <= 10.0 {
+            IN_HIST_LE_10MS.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+        if ms <= 50.0 {
+            IN_HIST_LE_50MS.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+        if ms <= 100.0 {
+            IN_HIST_LE_100MS.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+        if ms <= 500.0 {
+            IN_HIST_LE_500MS.fetch_add(1, Ordering::Relaxed);
+        }
         // +Inf: wird in der Exposition über count abgebildet
     }
 
@@ -655,20 +893,52 @@ pub mod async_svc {
             match cfg {
                 Some(c) => Self {
                     hdr: Bucket::new(
-                        if c.hdr_capacity == 0 { 2000 } else { c.hdr_capacity },
-                        if c.hdr_refill_per_sec == 0 { 2000 } else { c.hdr_refill_per_sec },
+                        if c.hdr_capacity == 0 {
+                            2000
+                        } else {
+                            c.hdr_capacity
+                        },
+                        if c.hdr_refill_per_sec == 0 {
+                            2000
+                        } else {
+                            c.hdr_refill_per_sec
+                        },
                     ),
                     inv: Bucket::new(
-                        if c.inv_capacity == 0 { 500 } else { c.inv_capacity },
-                        if c.inv_refill_per_sec == 0 { 500 } else { c.inv_refill_per_sec },
+                        if c.inv_capacity == 0 {
+                            500
+                        } else {
+                            c.inv_capacity
+                        },
+                        if c.inv_refill_per_sec == 0 {
+                            500
+                        } else {
+                            c.inv_refill_per_sec
+                        },
                     ),
                     req: Bucket::new(
-                        if c.req_capacity == 0 { 1000 } else { c.req_capacity },
-                        if c.req_refill_per_sec == 0 { 1000 } else { c.req_refill_per_sec },
+                        if c.req_capacity == 0 {
+                            1000
+                        } else {
+                            c.req_capacity
+                        },
+                        if c.req_refill_per_sec == 0 {
+                            1000
+                        } else {
+                            c.req_refill_per_sec
+                        },
                     ),
                     resp: Bucket::new(
-                        if c.resp_capacity == 0 { 1000 } else { c.resp_capacity },
-                        if c.resp_refill_per_sec == 0 { 1000 } else { c.resp_refill_per_sec },
+                        if c.resp_capacity == 0 {
+                            1000
+                        } else {
+                            c.resp_capacity
+                        },
+                        if c.resp_refill_per_sec == 0 {
+                            1000
+                        } else {
+                            c.resp_refill_per_sec
+                        },
                     ),
                 },
                 None => Self {
@@ -693,12 +963,18 @@ pub mod async_svc {
 
     struct InMemoryStore {
         headers: HashMap<AnchorId, AnchorHeader>,
-        payloads: HashMap<[u8;32], AnchorPayload>,
-        txs: HashMap<[u8;32], MicroTx>,
+        payloads: HashMap<[u8; 32], AnchorPayload>,
+        txs: HashMap<[u8; 32], MicroTx>,
     }
 
     impl InMemoryStore {
-        fn new() -> Self { Self { headers: HashMap::new(), payloads: HashMap::new(), txs: HashMap::new() } }
+        fn new() -> Self {
+            Self {
+                headers: HashMap::new(),
+                payloads: HashMap::new(),
+                txs: HashMap::new(),
+            }
+        }
         fn insert_header(&mut self, h: AnchorHeader) {
             let id = AnchorId(h.id_digest());
             let _ = self.headers.insert(id, h);
@@ -707,8 +983,10 @@ pub mod async_svc {
             let root = payload_merkle_root(&p);
             let _ = self.payloads.insert(root, p);
         }
-        fn has_payload(&self, root: &[u8;32]) -> bool { self.payloads.contains_key(root) }
-        fn get_headers(&self, ids: &[AnchorId]) -> (Vec<AnchorHeader>, Vec<[u8;32]>) {
+        fn has_payload(&self, root: &[u8; 32]) -> bool {
+            self.payloads.contains_key(root)
+        }
+        fn get_headers(&self, ids: &[AnchorId]) -> (Vec<AnchorHeader>, Vec<[u8; 32]>) {
             let mut found = Vec::new();
             let mut missing = Vec::new();
             for id in ids {
@@ -720,7 +998,7 @@ pub mod async_svc {
             }
             (found, missing)
         }
-        fn get_payloads(&self, roots: &[[u8;32]]) -> (Vec<AnchorPayload>, Vec<[u8;32]>) {
+        fn get_payloads(&self, roots: &[[u8; 32]]) -> (Vec<AnchorPayload>, Vec<[u8; 32]>) {
             let mut found = Vec::new();
             let mut missing = Vec::new();
             for r in roots {
@@ -736,31 +1014,51 @@ pub mod async_svc {
             let id = digest_microtx(&tx);
             let _ = self.txs.insert(id, tx);
         }
-        fn has_tx(&self, id: &[u8;32]) -> bool { self.txs.contains_key(id) }
-        fn get_txs(&self, ids: &[[u8;32]]) -> (Vec<MicroTx>, Vec<[u8;32]>) {
+        fn has_tx(&self, id: &[u8; 32]) -> bool {
+            self.txs.contains_key(id)
+        }
+        fn get_txs(&self, ids: &[[u8; 32]]) -> (Vec<MicroTx>, Vec<[u8; 32]>) {
             let mut found = Vec::new();
             let mut missing = Vec::new();
             for id in ids {
-                if let Some(tx) = self.txs.get(id) { found.push(tx.clone()); } else { missing.push(*id); }
+                if let Some(tx) = self.txs.get(id) {
+                    found.push(tx.clone());
+                } else {
+                    missing.push(*id);
+                }
             }
             (found, missing)
         }
     }
 
     #[derive(Clone)]
-    struct Outbox { tx: mpsc::Sender<P2pMessage> }
+    struct Outbox {
+        tx: mpsc::Sender<P2pMessage>,
+    }
     impl Outbox {
         async fn send(&self, msg: P2pMessage) {
             // Outbox Enqueue + Outbound per-Message-Typ zählen
             OUTBOX_ENQ_TOTAL.fetch_add(1, Ordering::Relaxed);
             OUTBOUND_TOTAL.fetch_add(1, Ordering::Relaxed);
             match &msg {
-                P2pMessage::HeaderAnnounce(_) => { OUT_HDR_TOTAL.fetch_add(1, Ordering::Relaxed); }
-                P2pMessage::HeadersInv { .. } => { OUT_INV_TOTAL.fetch_add(1, Ordering::Relaxed); }
-                P2pMessage::PayloadInv { .. } => { OUT_INV_TOTAL.fetch_add(1, Ordering::Relaxed); }
-                P2pMessage::TxInv { .. } => { OUT_INV_TOTAL.fetch_add(1, Ordering::Relaxed); }
-                P2pMessage::Req(_) => { OUT_REQ_TOTAL.fetch_add(1, Ordering::Relaxed); }
-                P2pMessage::Resp(_) => { OUT_RESP_TOTAL.fetch_add(1, Ordering::Relaxed); }
+                P2pMessage::HeaderAnnounce(_) => {
+                    OUT_HDR_TOTAL.fetch_add(1, Ordering::Relaxed);
+                }
+                P2pMessage::HeadersInv { .. } => {
+                    OUT_INV_TOTAL.fetch_add(1, Ordering::Relaxed);
+                }
+                P2pMessage::PayloadInv { .. } => {
+                    OUT_INV_TOTAL.fetch_add(1, Ordering::Relaxed);
+                }
+                P2pMessage::TxInv { .. } => {
+                    OUT_INV_TOTAL.fetch_add(1, Ordering::Relaxed);
+                }
+                P2pMessage::Req(_) => {
+                    OUT_REQ_TOTAL.fetch_add(1, Ordering::Relaxed);
+                }
+                P2pMessage::Resp(_) => {
+                    OUT_RESP_TOTAL.fetch_add(1, Ordering::Relaxed);
+                }
             }
             let _ = self.tx.send(msg).await;
         }
@@ -772,12 +1070,27 @@ pub mod async_svc {
         out: Outbox,
         store_delegate: Option<Arc<dyn StoreDelegate>>,
     ) -> Result<(), P2pError> {
-        if cfg.max_peers == 0 { return Err(P2pError::InvalidConfig); }
+        if cfg.max_peers == 0 {
+            return Err(P2pError::InvalidConfig);
+        }
         let mut store = InMemoryStore::new();
         let mut rl = RateLimiter::from_cfg(cfg.rate.as_ref());
-        struct PeerRate { rl: RateLimiter, last_seen: Instant }
+        struct PeerRate {
+            rl: RateLimiter,
+            last_seen: Instant,
+        }
         let mut per_peer_rl: HashMap<SocketAddr, PeerRate> = HashMap::new();
-        let ttl_secs = cfg.rate.as_ref().map(|r| if r.peer_ttl_secs == 0 { 600 } else { r.peer_ttl_secs }).unwrap_or(600);
+        let ttl_secs = cfg
+            .rate
+            .as_ref()
+            .map(|r| {
+                if r.peer_ttl_secs == 0 {
+                    600
+                } else {
+                    r.peer_ttl_secs
+                }
+            })
+            .unwrap_or(600);
 
         loop {
             tokio::select! {
@@ -884,7 +1197,7 @@ pub mod async_svc {
                             if rl.allow_msg(&P2pMessage::Resp(resp.clone())) {
                                 INBOUND_TOTAL.fetch_add(1, Ordering::Relaxed);
                                 IN_RESP_TOTAL.fetch_add(1, Ordering::Relaxed);
-                                match resp { 
+                                match resp {
                                     RespMsg::Headers { ref headers } => {
                                         for h in headers.iter().cloned() {
                                             if let Some(d) = &store_delegate { d.insert_header(h).await; } else { store.insert_header(h); }
@@ -900,7 +1213,7 @@ pub mod async_svc {
                                             if let Some(d) = &store_delegate { d.insert_tx(tx).await; } else { store.insert_tx(tx); }
                                         }
                                     },
-                                    RespMsg::NotFound { .. } => { } 
+                                    RespMsg::NotFound { .. } => { }
                                 }
                                 notify_inbound(&P2pMessage::Resp(resp.clone()));
                             } else { INBOUND_DROPPED_RATE.fetch_add(1, Ordering::Relaxed); }
@@ -1007,7 +1320,7 @@ pub mod async_svc {
                                                 },
                                                 RespMsg::NotFound { .. } => { }
                                             }
-                                            notify_inbound(&P2pMessage::Resp(resp.clone())); 
+                                            notify_inbound(&P2pMessage::Resp(resp.clone()));
                                         } else { INBOUND_DROPPED_RATE.fetch_add(1, Ordering::Relaxed); }
                                         record_in_latency(start.elapsed());
                                     }
@@ -1113,9 +1426,9 @@ pub mod async_svc {
                                                         if let Some(d) = &store_delegate { d.insert_tx(tx).await; } else { store.insert_tx(tx); }
                                                     }
                                                 },
-                                                RespMsg::NotFound { .. } => { } 
+                                                RespMsg::NotFound { .. } => { }
                                             }
-                                            notify_inbound(&P2pMessage::Resp(resp.clone())); 
+                                            notify_inbound(&P2pMessage::Resp(resp.clone()));
                                         } else { INBOUND_DROPPED_RATE.fetch_add(1, Ordering::Relaxed); }
                                         record_in_latency(start.elapsed());
                                     }
@@ -1144,7 +1457,13 @@ pub mod async_svc {
         Ok(())
     }
 
-    pub fn spawn(cfg: P2pConfig) -> (P2pService, mpsc::Receiver<P2pMessage>, tokio::task::JoinHandle<Result<(), P2pError>>) {
+    pub fn spawn(
+        cfg: P2pConfig,
+    ) -> (
+        P2pService,
+        mpsc::Receiver<P2pMessage>,
+        tokio::task::JoinHandle<Result<(), P2pError>>,
+    ) {
         let (tx, rx) = mpsc::channel(1024);
         let (out_tx, out_rx) = mpsc::channel(1024);
         let out = Outbox { tx: out_tx };
@@ -1157,7 +1476,11 @@ pub mod async_svc {
     pub fn spawn_with_store(
         cfg: P2pConfig,
         store: Arc<dyn StoreDelegate>,
-    ) -> (P2pService, mpsc::Receiver<P2pMessage>, tokio::task::JoinHandle<Result<(), P2pError>>) {
+    ) -> (
+        P2pService,
+        mpsc::Receiver<P2pMessage>,
+        tokio::task::JoinHandle<Result<(), P2pError>>,
+    ) {
         let (tx, rx) = mpsc::channel(1024);
         let (out_tx, out_rx) = mpsc::channel(1024);
         let out = Outbox { tx: out_tx };
@@ -1171,8 +1494,14 @@ pub mod async_svc {
         async fn deliver(&self, msg: P2pMessage) -> Result<(), P2pError>;
     }
 
-    pub struct InProcessSink { remote: P2pService }
-    impl InProcessSink { pub fn new(remote: P2pService) -> Self { Self { remote } } }
+    pub struct InProcessSink {
+        remote: P2pService,
+    }
+    impl InProcessSink {
+        pub fn new(remote: P2pService) -> Self {
+            Self { remote }
+        }
+    }
 
     #[async_trait::async_trait]
     impl OutboundSink for InProcessSink {
@@ -1184,62 +1513,105 @@ pub mod async_svc {
     #[cfg(test)]
     #[cfg(feature = "async")]
     mod itests {
-        use super::*;
         use super::super::messages::{P2pMessage, ReqMsg, RespMsg};
-        use pc_types::{AnchorPayload, payload_merkle_root};
+        use super::*;
+        use pc_types::{payload_merkle_root, AnchorPayload};
         use pc_types::{AnchorHeader, AnchorId};
         use tokio::time::{timeout, Duration};
 
         // End-to-End: INV -> GET_PAYLOADS -> PAYLOADS zwischen zwei Loops
         #[tokio::test]
         async fn inv_getpayloads_flow() {
-            let cfg = P2pConfig { max_peers: 8, rate: None };
+            let cfg = P2pConfig {
+                max_peers: 8,
+                rate: None,
+            };
             let (svc_a, mut out_a, handle_a) = spawn(cfg.clone());
             let (svc_b, mut out_b, handle_b) = spawn(cfg.clone());
 
             // Erzeuge Payload auf A
-            let payload = AnchorPayload { version:1, micro_txs: vec![], mints: vec![], claims: vec![], evidences: vec![], payout_root: [9u8;32] };
+            let payload = AnchorPayload {
+                version: 1,
+                micro_txs: vec![],
+                mints: vec![],
+                claims: vec![],
+                evidences: vec![],
+                payout_root: [9u8; 32],
+            };
             let root = payload_merkle_root(&payload);
             let _ = svc_a.put_payload(payload).await; // ok if ChannelClosed? here it should be ok
 
             // Sende INV an B (Simuliert Netzwerk)
-            let _ = svc_b.send_message(P2pMessage::PayloadInv { roots: vec![root] }).await;
+            let _ = svc_b
+                .send_message(P2pMessage::PayloadInv { roots: vec![root] })
+                .await;
 
             // B soll GET_PAYLOADS erzeugen (auf out_b)
             let req = timeout(Duration::from_secs(1), async {
                 loop {
                     if let Some(msg) = out_b.recv().await {
-                        if let P2pMessage::Req(ReqMsg::GetPayloads { roots }) = msg { return Some(roots); }
-                    } else { return None; }
+                        if let P2pMessage::Req(ReqMsg::GetPayloads { roots }) = msg {
+                            return Some(roots);
+                        }
+                    } else {
+                        return None;
+                    }
                 }
-            }).await.ok().flatten().unwrap_or_default();
+            })
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_default();
             assert_eq!(req, vec![root]);
 
             // Leite GET_PAYLOADS von B an A (simuliert Netzwerk)
-            let _ = svc_a.send_message(P2pMessage::Req(ReqMsg::GetPayloads { roots: req.clone() })).await;
+            let _ = svc_a
+                .send_message(P2pMessage::Req(ReqMsg::GetPayloads { roots: req.clone() }))
+                .await;
 
             // Erwarte auf out_a die PAYLOADS-Response
             let resp_from_a = timeout(Duration::from_secs(1), async {
                 loop {
                     if let Some(msg) = out_a.recv().await {
-                        if let P2pMessage::Resp(RespMsg::Payloads { payloads }) = msg { return Some(payloads); }
-                    } else { return None; }
+                        if let P2pMessage::Resp(RespMsg::Payloads { payloads }) = msg {
+                            return Some(payloads);
+                        }
+                    } else {
+                        return None;
+                    }
                 }
-            }).await.ok().flatten().unwrap_or_default();
+            })
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_default();
             assert!(!resp_from_a.is_empty());
 
             // Forwarde die Response von A an B (B speichert nun Payload)
-            let _ = svc_b.send_message(P2pMessage::Resp(RespMsg::Payloads { payloads: resp_from_a.clone() })).await;
+            let _ = svc_b
+                .send_message(P2pMessage::Resp(RespMsg::Payloads {
+                    payloads: resp_from_a.clone(),
+                }))
+                .await;
 
             // Prüfe: Stelle GET_PAYLOADS an B und erwarte PAYLOADS als Antwort auf out_b
-            let _ = svc_b.send_message(P2pMessage::Req(ReqMsg::GetPayloads { roots: vec![root] })).await;
+            let _ = svc_b
+                .send_message(P2pMessage::Req(ReqMsg::GetPayloads { roots: vec![root] }))
+                .await;
             let got = timeout(Duration::from_secs(1), async {
                 loop {
                     if let Some(msg) = out_b.recv().await {
-                        if let P2pMessage::Resp(RespMsg::Payloads { payloads }) = msg { return Some(payloads); }
-                    } else { return None; }
+                        if let P2pMessage::Resp(RespMsg::Payloads { payloads }) = msg {
+                            return Some(payloads);
+                        }
+                    } else {
+                        return None;
+                    }
                 }
-            }).await.ok().flatten();
+            })
+            .await
+            .ok()
+            .flatten();
             assert!(got.map(|v| !v.is_empty()).unwrap_or(false));
 
             // Shutdown sauber
@@ -1252,55 +1624,105 @@ pub mod async_svc {
         // End-to-End: HEADERS_INV -> GET_HEADERS -> HEADERS zwischen zwei Loops
         #[tokio::test]
         async fn headers_inv_getheaders_flow() {
-            let cfg = P2pConfig { max_peers: 8, rate: None };
+            let cfg = P2pConfig {
+                max_peers: 8,
+                rate: None,
+            };
             let (svc_a, mut out_a, handle_a) = spawn(cfg.clone());
             let (svc_b, mut out_b, handle_b) = spawn(cfg.clone());
 
             // Erzeuge Header auf A
             let parents = pc_types::ParentList::default();
-            let hdr = AnchorHeader { version:1, shard_id:0, parents, payload_hash:[0u8;32], creator_index:1, vote_mask:0, ack_present:false, ack_id: AnchorId([0u8;32]) };
+            let hdr = AnchorHeader {
+                version: 1,
+                shard_id: 0,
+                parents,
+                payload_hash: [0u8; 32],
+                creator_index: 1,
+                vote_mask: 0,
+                ack_present: false,
+                ack_id: AnchorId([0u8; 32]),
+            };
             let id = pc_types::AnchorId(hdr.id_digest());
             // Insert in A-Store durch Incoming-Message
-            let _ = svc_a.send_message(P2pMessage::HeaderAnnounce(hdr.clone())).await;
+            let _ = svc_a
+                .send_message(P2pMessage::HeaderAnnounce(hdr.clone()))
+                .await;
 
             // Sende HEADERS_INV an B (simuliert Netzwerk)
-            let _ = svc_b.send_message(P2pMessage::HeadersInv { ids: vec![id] }).await;
+            let _ = svc_b
+                .send_message(P2pMessage::HeadersInv { ids: vec![id] })
+                .await;
 
             // B soll GET_HEADERS erzeugen (auf out_b)
             let req_ids = timeout(Duration::from_secs(1), async {
                 loop {
                     if let Some(msg) = out_b.recv().await {
-                        if let P2pMessage::Req(ReqMsg::GetHeaders { ids }) = msg { return Some(ids); }
-                    } else { return None; }
+                        if let P2pMessage::Req(ReqMsg::GetHeaders { ids }) = msg {
+                            return Some(ids);
+                        }
+                    } else {
+                        return None;
+                    }
                 }
-            }).await.ok().flatten().unwrap_or_default();
+            })
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_default();
             assert_eq!(req_ids, vec![id]);
 
             // Leite GET_HEADERS von B an A (simuliert Netzwerk)
-            let _ = svc_a.send_message(P2pMessage::Req(ReqMsg::GetHeaders { ids: req_ids.clone() })).await;
+            let _ = svc_a
+                .send_message(P2pMessage::Req(ReqMsg::GetHeaders {
+                    ids: req_ids.clone(),
+                }))
+                .await;
 
             // Erwarte auf out_a die HEADERS-Response
             let resp_from_a = timeout(Duration::from_secs(1), async {
                 loop {
                     if let Some(msg) = out_a.recv().await {
-                        if let P2pMessage::Resp(RespMsg::Headers { headers }) = msg { return Some(headers); }
-                    } else { return None; }
+                        if let P2pMessage::Resp(RespMsg::Headers { headers }) = msg {
+                            return Some(headers);
+                        }
+                    } else {
+                        return None;
+                    }
                 }
-            }).await.ok().flatten().unwrap_or_default();
+            })
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_default();
             assert_eq!(resp_from_a.len(), 1);
 
             // Forwarde die Response von A an B (B speichert nun Header)
-            let _ = svc_b.send_message(P2pMessage::Resp(RespMsg::Headers { headers: resp_from_a.clone() })).await;
+            let _ = svc_b
+                .send_message(P2pMessage::Resp(RespMsg::Headers {
+                    headers: resp_from_a.clone(),
+                }))
+                .await;
 
             // Prüfe: Stelle GET_HEADERS an B und erwarte HEADERS als Antwort auf out_b
-            let _ = svc_b.send_message(P2pMessage::Req(ReqMsg::GetHeaders { ids: vec![id] })).await;
+            let _ = svc_b
+                .send_message(P2pMessage::Req(ReqMsg::GetHeaders { ids: vec![id] }))
+                .await;
             let got = timeout(Duration::from_secs(1), async {
                 loop {
                     if let Some(msg) = out_b.recv().await {
-                        if let P2pMessage::Resp(RespMsg::Headers { headers }) = msg { return Some(headers); }
-                    } else { return None; }
+                        if let P2pMessage::Resp(RespMsg::Headers { headers }) = msg {
+                            return Some(headers);
+                        }
+                    } else {
+                        return None;
+                    }
                 }
-            }).await.ok().flatten().unwrap_or_default();
+            })
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_default();
             assert_eq!(got.len(), 1);
 
             // Shutdown sauber

@@ -9,40 +9,51 @@
     clippy::indexing_slicing
 )]
 
-use anyhow::{Result, bail, anyhow};
-use clap::{Parser, Subcommand, Args};
-use pc_consensus::{finality_threshold, is_final, popcount_u64, set_bit, FeeSplitParams, compute_total_payout_root, compute_committee_payout_from_headers, compute_ack_distances_for_seats, AnchorGraphCache, compute_committee_payout, ConsensusEngine, ConsensusConfig};
-use pc_types::{AnchorHeader, ParentList, AnchorId, AnchorPayload, PayoutSet, MicroTx, MintEvent, ClaimEvent, EvidenceEvent, PayoutEntry, TxOut, LockCommitment, OutPoint};
-use pc_codec::{self, Encodable, Decodable};
-use pc_types::payload_merkle_root;
-use pc_types::validate_payload_sanity;
-use pc_types::validate_microtx_sanity;
-use pc_types::digest_microtx;
-use pc_types::MAX_PAYLOAD_MICROTX;
-use tracing::{info, warn};
-use pc_p2p::messages::{P2pMessage, RespMsg};
-use std::net::SocketAddr;
-use pc_p2p::quic_transport::{start_server, client_config_from_cert, connect, QuicClientSink, spawn_client_reader};
-use pc_p2p::async_svc::{OutboundSink, metrics_snapshot, outbox_deq_inc, inbound_subscribe, StoreDelegate};
-use pc_p2p::RateLimitConfig;
-use pc_store::FileStore;
-use hyper::{Body, Request, Response, Server};
-use hyper::service::{make_service_fn, service_fn};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use anyhow::{anyhow, bail, Result};
 use async_trait::async_trait;
-use tokio::sync::{Mutex, mpsc};
-use tokio::time::{interval, Duration};
+use clap::{Args, Parser, Subcommand};
+use hyper::service::{make_service_fn, service_fn};
+use hyper::{Body, Request, Response, Server};
 use lru::LruCache;
-use std::num::NonZeroUsize;
-use serde::Deserialize;
-use std::time::Instant;
+use pc_codec::{self, Decodable, Encodable};
+use pc_consensus::{
+    compute_ack_distances_for_seats, compute_committee_payout,
+    compute_committee_payout_from_headers, compute_total_payout_root, finality_threshold, is_final,
+    popcount_u64, set_bit, AnchorGraphCache, ConsensusConfig, ConsensusEngine, FeeSplitParams,
+};
 use pc_crypto::blake3_32;
-use std::hash::{Hash, Hasher};
-use std::collections::{hash_map::DefaultHasher, HashSet, HashMap, VecDeque};
-use pc_state::UtxoState;
+use pc_p2p::async_svc::{
+    inbound_subscribe, metrics_snapshot, outbox_deq_inc, OutboundSink, StoreDelegate,
+};
+use pc_p2p::messages::{P2pMessage, RespMsg};
+use pc_p2p::quic_transport::{
+    client_config_from_cert, connect, spawn_client_reader, start_server, QuicClientSink,
+};
+use pc_p2p::RateLimitConfig;
 #[cfg(not(feature = "rocksdb"))]
 use pc_state::InMemoryBackend;
+use pc_state::UtxoState;
+use pc_store::FileStore;
+use pc_types::digest_microtx;
+use pc_types::payload_merkle_root;
+use pc_types::validate_microtx_sanity;
+use pc_types::validate_payload_sanity;
+use pc_types::MAX_PAYLOAD_MICROTX;
+use pc_types::{
+    AnchorHeader, AnchorId, AnchorPayload, ClaimEvent, EvidenceEvent, LockCommitment, MicroTx,
+    MintEvent, OutPoint, ParentList, PayoutEntry, PayoutSet, TxOut,
+};
+use serde::Deserialize;
+use std::collections::{hash_map::DefaultHasher, HashMap, HashSet, VecDeque};
+use std::hash::{Hash, Hasher};
+use std::net::SocketAddr;
+use std::num::NonZeroUsize;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::Instant;
+use tokio::sync::{mpsc, Mutex};
+use tokio::time::{interval, Duration};
+use tracing::{info, warn};
 
 fn init_tracing() {
     let _ = tracing_subscriber::fmt()
@@ -53,11 +64,14 @@ fn init_tracing() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write as _;
     use std::io::Read as _;
+    use std::io::Write as _;
 
     fn unique_tmp(prefix: &str) -> std::path::PathBuf {
-        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         std::env::temp_dir().join(format!("pc_journal_test_{}_{}", prefix, nanos))
     }
 
@@ -69,27 +83,45 @@ mod tests {
         let journal_path = mempool_dir.join("mempool.journal");
 
         // Baue minimalen MicroTx (leer), schreibe Datei + Journal
-        let tx = MicroTx { version:1, inputs: vec![], outputs: vec![] };
+        let tx = MicroTx {
+            version: 1,
+            inputs: vec![],
+            outputs: vec![],
+        };
         let id = digest_microtx(&tx);
         let fname = format!("{}.bin", hex::encode(id));
         let path = mempool_dir.join(fname);
-        let mut buf = Vec::new(); tx.encode(&mut buf).unwrap();
+        let mut buf = Vec::new();
+        tx.encode(&mut buf).unwrap();
         atomic_write(&path, &buf, false).unwrap();
         journal_append(&journal_path, false, b'A', &id).unwrap();
 
         // Recovery nach Journal: aktive IDs
         let contents = std::fs::read_to_string(&journal_path).unwrap();
-        let mut active: std::collections::HashSet<[u8;32]> = std::collections::HashSet::new();
+        let mut active: std::collections::HashSet<[u8; 32]> = std::collections::HashSet::new();
         for line in contents.lines() {
             let (op, hexid) = line.split_at(1);
             let bytes = hex::decode(hexid).unwrap();
-            let mut id = [0u8;32]; id.copy_from_slice(&bytes);
-            match op.as_bytes()[0] { b'A' => { active.insert(id); }, b'D' => { active.remove(&id); }, _ => {} }
+            let mut id = [0u8; 32];
+            id.copy_from_slice(&bytes);
+            match op.as_bytes()[0] {
+                b'A' => {
+                    active.insert(id);
+                }
+                b'D' => {
+                    active.remove(&id);
+                }
+                _ => {}
+            }
         }
         assert!(active.contains(&id));
 
         // Datei laden und decodieren
-        let mut fb = Vec::new(); std::fs::File::open(&path).unwrap().read_to_end(&mut fb).unwrap();
+        let mut fb = Vec::new();
+        std::fs::File::open(&path)
+            .unwrap()
+            .read_to_end(&mut fb)
+            .unwrap();
         let got = MicroTx::decode(&mut &fb[..]).unwrap();
         assert_eq!(tx, got);
     }
@@ -111,15 +143,40 @@ mod tests {
     #[test]
     fn deterministic_sort_matches_payload_root() {
         // Drei Txs, unsortiert
-        let mk = |n: u8| MicroTx { version:1, inputs: vec![], outputs: vec![TxOut { amount: n as u64, lock: LockCommitment([n;32]) }] };
+        let mk = |n: u8| MicroTx {
+            version: 1,
+            inputs: vec![],
+            outputs: vec![TxOut {
+                amount: n as u64,
+                lock: LockCommitment([n; 32]),
+            }],
+        };
         let txs = vec![mk(3), mk(1), mk(2)];
         let sorted = {
             let mut v = txs.clone();
-            v.sort_unstable_by(|a,b| digest_microtx(a).cmp(&digest_microtx(b))); v
+            v.sort_unstable_by(|a, b| digest_microtx(a).cmp(&digest_microtx(b)));
+            v
         };
-        let p_unsorted = AnchorPayload { version:1, micro_txs: txs, mints: vec![], claims: vec![], evidences: vec![], payout_root: [0u8;32] };
-        let p_sorted = AnchorPayload { version:1, micro_txs: sorted, mints: vec![], claims: vec![], evidences: vec![], payout_root: [0u8;32] };
-        assert_eq!(payload_merkle_root(&p_unsorted), payload_merkle_root(&p_sorted));
+        let p_unsorted = AnchorPayload {
+            version: 1,
+            micro_txs: txs,
+            mints: vec![],
+            claims: vec![],
+            evidences: vec![],
+            payout_root: [0u8; 32],
+        };
+        let p_sorted = AnchorPayload {
+            version: 1,
+            micro_txs: sorted,
+            mints: vec![],
+            claims: vec![],
+            evidences: vec![],
+            payout_root: [0u8; 32],
+        };
+        assert_eq!(
+            payload_merkle_root(&p_unsorted),
+            payload_merkle_root(&p_sorted)
+        );
     }
 
     #[test]
@@ -130,7 +187,14 @@ mod tests {
         std::fs::create_dir_all(&mempool_dir).unwrap();
         let journal_path = mempool_dir.join("mempool.journal");
 
-        let mk = |n: u8| MicroTx { version:1, inputs: vec![], outputs: vec![TxOut { amount: n as u64, lock: LockCommitment([n;32]) }] };
+        let mk = |n: u8| MicroTx {
+            version: 1,
+            inputs: vec![],
+            outputs: vec![TxOut {
+                amount: n as u64,
+                lock: LockCommitment([n; 32]),
+            }],
+        };
         let tx_keep = mk(7);
         let tx_inval = mk(9);
         let id_keep = digest_microtx(&tx_keep);
@@ -140,21 +204,29 @@ mod tests {
         for (tx, id) in [(&tx_keep, &id_keep), (&tx_inval, &id_inval)] {
             let fname = format!("{}.bin", hex::encode(id));
             let path = mempool_dir.join(fname);
-            let mut buf = Vec::new(); tx.encode(&mut buf).unwrap();
+            let mut buf = Vec::new();
+            tx.encode(&mut buf).unwrap();
             atomic_write(&path, &buf, false).unwrap();
             journal_append(&journal_path, false, b'A', id).unwrap();
         }
 
         // RAM‑Mempool und Order füllen
-        let mut mempool: HashMap<[u8;32], (MicroTx, Instant)> = HashMap::new();
-        let mut order: VecDeque<[u8;32]> = VecDeque::new();
+        let mut mempool: HashMap<[u8; 32], (MicroTx, Instant)> = HashMap::new();
+        let mut order: VecDeque<[u8; 32]> = VecDeque::new();
         let _ = mempool.insert(id_keep, (tx_keep.clone(), Instant::now()));
         let _ = mempool.insert(id_inval, (tx_inval.clone(), Instant::now()));
         order.push_back(id_keep);
         order.push_back(id_inval);
 
         // Payload mit tx_inval
-        let payload = AnchorPayload { version:1, micro_txs: vec![tx_inval.clone()], mints: vec![], claims: vec![], evidences: vec![], payout_root: [0u8;32] };
+        let payload = AnchorPayload {
+            version: 1,
+            micro_txs: vec![tx_inval.clone()],
+            mints: vec![],
+            claims: vec![],
+            evidences: vec![],
+            payout_root: [0u8; 32],
+        };
 
         // Invalidation simulieren (inline wie im State‑Task)
         let mut invalidated: u64 = 0;
@@ -162,7 +234,9 @@ mod tests {
             let id = digest_microtx(tx);
             if mempool.remove(&id).is_some() {
                 invalidated += 1;
-                if let Some(pos) = order.iter().position(|k| *k == id) { let _ = order.remove(pos); }
+                if let Some(pos) = order.iter().position(|k| *k == id) {
+                    let _ = order.remove(pos);
+                }
                 let fname = format!("{}.bin", hex::encode(id));
                 let path = mempool_dir.join(fname);
                 journal_append(&journal_path, false, b'D', &id).unwrap();
@@ -183,7 +257,11 @@ mod tests {
         assert_eq!(order.front().copied(), Some(id_keep));
     }
 }
-fn rewrite_mempool_journal(journal_path: &std::path::Path, ids: &VecDeque<[u8;32]>, do_fsync: bool) -> std::io::Result<()> {
+fn rewrite_mempool_journal(
+    journal_path: &std::path::Path,
+    ids: &VecDeque<[u8; 32]>,
+    do_fsync: bool,
+) -> std::io::Result<()> {
     use std::io::Write as _;
     let mut tmp = journal_path.to_path_buf();
     tmp.set_extension("journal.tmp");
@@ -194,27 +272,41 @@ fn rewrite_mempool_journal(journal_path: &std::path::Path, ids: &VecDeque<[u8;32
             f.write_all(hex::encode(id).as_bytes())?;
             f.write_all(b"\n")?;
         }
-        if do_fsync { let _ = f.sync_data(); }
+        if do_fsync {
+            let _ = f.sync_data();
+        }
     }
     std::fs::rename(&tmp, journal_path)?;
     if do_fsync {
         if let Some(dir) = journal_path.parent() {
-            if let Ok(dirf) = std::fs::File::open(dir) { let _ = dirf.sync_data(); }
+            if let Ok(dirf) = std::fs::File::open(dir) {
+                let _ = dirf.sync_data();
+            }
         }
     }
     Ok(())
 }
 
-fn journal_append(journal_path: &std::path::Path, do_fsync: bool, op: u8, id: &[u8;32]) -> std::io::Result<()> {
+fn journal_append(
+    journal_path: &std::path::Path,
+    do_fsync: bool,
+    op: u8,
+    id: &[u8; 32],
+) -> std::io::Result<()> {
     use std::io::Write as _;
-    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(journal_path)?;
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(journal_path)?;
     // Zeile: 'A' oder 'D' + hex + '\n'
     let mut line = Vec::with_capacity(1 + 64 + 1);
     line.push(op);
     line.extend_from_slice(hex::encode(id).as_bytes());
     line.push(b'\n');
     f.write_all(&line)?;
-    if do_fsync { let _ = f.sync_data(); }
+    if do_fsync {
+        let _ = f.sync_data();
+    }
     Ok(())
 }
 
@@ -222,7 +314,9 @@ fn remove_with_dir_sync(path: &std::path::Path, do_fsync: bool) -> std::io::Resu
     std::fs::remove_file(path)?;
     if do_fsync {
         if let Some(dir) = path.parent() {
-            if let Ok(dirf) = std::fs::File::open(dir) { let _ = dirf.sync_data(); }
+            if let Ok(dirf) = std::fs::File::open(dir) {
+                let _ = dirf.sync_data();
+            }
         }
     }
     Ok(())
@@ -235,12 +329,16 @@ fn atomic_write(path: &std::path::Path, data: &[u8], do_fsync: bool) -> std::io:
         let mut f = std::fs::File::create(&tmp)?;
         use std::io::Write as _;
         f.write_all(data)?;
-        if do_fsync { let _ = f.sync_data(); }
+        if do_fsync {
+            let _ = f.sync_data();
+        }
     }
     std::fs::rename(&tmp, path)?;
     if do_fsync {
         if let Some(dir) = path.parent() {
-            if let Ok(dirf) = std::fs::File::open(dir) { let _ = dirf.sync_data(); }
+            if let Ok(dirf) = std::fs::File::open(dir) {
+                let _ = dirf.sync_data();
+            }
         }
     }
     Ok(())
@@ -320,12 +418,19 @@ fn observe_hdr_read(d: std::time::Duration) {
     let us = d.as_micros() as u64;
     NODE_STORE_HDR_READ_COUNT.fetch_add(1, Ordering::Relaxed);
     NODE_STORE_HDR_READ_SUM_MICROS.fetch_add(us, Ordering::Relaxed);
-    if us <= 1_000 { NODE_STORE_HDR_BUCKET_LE_1MS.fetch_add(1, Ordering::Relaxed); }
-    else if us <= 5_000 { NODE_STORE_HDR_BUCKET_LE_5MS.fetch_add(1, Ordering::Relaxed); }
-    else if us <= 10_000 { NODE_STORE_HDR_BUCKET_LE_10MS.fetch_add(1, Ordering::Relaxed); }
-    else if us <= 50_000 { NODE_STORE_HDR_BUCKET_LE_50MS.fetch_add(1, Ordering::Relaxed); }
-    else if us <= 100_000 { NODE_STORE_HDR_BUCKET_LE_100MS.fetch_add(1, Ordering::Relaxed); }
-    else if us <= 500_000 { NODE_STORE_HDR_BUCKET_LE_500MS.fetch_add(1, Ordering::Relaxed); }
+    if us <= 1_000 {
+        NODE_STORE_HDR_BUCKET_LE_1MS.fetch_add(1, Ordering::Relaxed);
+    } else if us <= 5_000 {
+        NODE_STORE_HDR_BUCKET_LE_5MS.fetch_add(1, Ordering::Relaxed);
+    } else if us <= 10_000 {
+        NODE_STORE_HDR_BUCKET_LE_10MS.fetch_add(1, Ordering::Relaxed);
+    } else if us <= 50_000 {
+        NODE_STORE_HDR_BUCKET_LE_50MS.fetch_add(1, Ordering::Relaxed);
+    } else if us <= 100_000 {
+        NODE_STORE_HDR_BUCKET_LE_100MS.fetch_add(1, Ordering::Relaxed);
+    } else if us <= 500_000 {
+        NODE_STORE_HDR_BUCKET_LE_500MS.fetch_add(1, Ordering::Relaxed);
+    }
     // +Inf implizit über count
 }
 
@@ -333,12 +438,19 @@ fn observe_pl_read(d: std::time::Duration) {
     let us = d.as_micros() as u64;
     NODE_STORE_PL_READ_COUNT.fetch_add(1, Ordering::Relaxed);
     NODE_STORE_PL_READ_SUM_MICROS.fetch_add(us, Ordering::Relaxed);
-    if us <= 1_000 { NODE_STORE_PL_BUCKET_LE_1MS.fetch_add(1, Ordering::Relaxed); }
-    else if us <= 5_000 { NODE_STORE_PL_BUCKET_LE_5MS.fetch_add(1, Ordering::Relaxed); }
-    else if us <= 10_000 { NODE_STORE_PL_BUCKET_LE_10MS.fetch_add(1, Ordering::Relaxed); }
-    else if us <= 50_000 { NODE_STORE_PL_BUCKET_LE_50MS.fetch_add(1, Ordering::Relaxed); }
-    else if us <= 100_000 { NODE_STORE_PL_BUCKET_LE_100MS.fetch_add(1, Ordering::Relaxed); }
-    else if us <= 500_000 { NODE_STORE_PL_BUCKET_LE_500MS.fetch_add(1, Ordering::Relaxed); }
+    if us <= 1_000 {
+        NODE_STORE_PL_BUCKET_LE_1MS.fetch_add(1, Ordering::Relaxed);
+    } else if us <= 5_000 {
+        NODE_STORE_PL_BUCKET_LE_5MS.fetch_add(1, Ordering::Relaxed);
+    } else if us <= 10_000 {
+        NODE_STORE_PL_BUCKET_LE_10MS.fetch_add(1, Ordering::Relaxed);
+    } else if us <= 50_000 {
+        NODE_STORE_PL_BUCKET_LE_50MS.fetch_add(1, Ordering::Relaxed);
+    } else if us <= 100_000 {
+        NODE_STORE_PL_BUCKET_LE_100MS.fetch_add(1, Ordering::Relaxed);
+    } else if us <= 500_000 {
+        NODE_STORE_PL_BUCKET_LE_500MS.fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 // Sharded-LRU zur Reduktion von Mutex-Contention
@@ -383,16 +495,29 @@ impl<K: Hash + Eq + Clone, V: Clone> ShardedLru<K, V> {
 struct NodeDiskStore {
     inner: Arc<FileStore>,
     hdr_cache: Option<Arc<ShardedLru<AnchorId, AnchorHeader>>>,
-    pl_cache: Option<Arc<ShardedLru<[u8;32], AnchorPayload>>>,
-    txs: Arc<tokio::sync::Mutex<HashMap<[u8;32], MicroTx>>>,
+    pl_cache: Option<Arc<ShardedLru<[u8; 32], AnchorPayload>>>,
+    txs: Arc<tokio::sync::Mutex<HashMap<[u8; 32], MicroTx>>>,
 }
 
 impl NodeDiskStore {
     fn new(store: FileStore, hdr_cap: usize, pl_cap: usize) -> Self {
         let shards = std::cmp::max(1, num_cpus::get());
-        let hdr_cache = if hdr_cap > 0 { Some(Arc::new(ShardedLru::new(shards, hdr_cap))) } else { None };
-        let pl_cache = if pl_cap > 0 { Some(Arc::new(ShardedLru::new(shards, pl_cap))) } else { None };
-        Self { inner: Arc::new(store), hdr_cache, pl_cache, txs: Arc::new(tokio::sync::Mutex::new(HashMap::new())) }
+        let hdr_cache = if hdr_cap > 0 {
+            Some(Arc::new(ShardedLru::new(shards, hdr_cap)))
+        } else {
+            None
+        };
+        let pl_cache = if pl_cap > 0 {
+            Some(Arc::new(ShardedLru::new(shards, pl_cap)))
+        } else {
+            None
+        };
+        Self {
+            inner: Arc::new(store),
+            hdr_cache,
+            pl_cache,
+            txs: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        }
     }
 }
 
@@ -404,9 +529,15 @@ impl pc_p2p::async_svc::StoreDelegate for NodeDiskStore {
         match tokio::task::spawn_blocking(move || store.put_header(&h)).await {
             Ok(Ok(_)) => {
                 NODE_PERSIST_HEADERS_TOTAL.fetch_add(1, Ordering::Relaxed);
-                if let Some(c) = &self.hdr_cache { let id = AnchorId(h_clone_for_cache.id_digest()); c.put(id, h_clone_for_cache).await; }
+                if let Some(c) = &self.hdr_cache {
+                    let id = AnchorId(h_clone_for_cache.id_digest());
+                    c.put(id, h_clone_for_cache).await;
+                }
             }
-            _ => { NODE_PERSIST_HEADERS_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed); warn!("store.put_header failed"); }
+            _ => {
+                NODE_PERSIST_HEADERS_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed);
+                warn!("store.put_header failed");
+            }
         }
     }
     async fn insert_payload(&self, p: AnchorPayload) {
@@ -415,12 +546,18 @@ impl pc_p2p::async_svc::StoreDelegate for NodeDiskStore {
         match tokio::task::spawn_blocking(move || store.put_payload(&p)).await {
             Ok(Ok(_)) => {
                 NODE_PERSIST_PAYLOADS_TOTAL.fetch_add(1, Ordering::Relaxed);
-                if let Some(c) = &self.pl_cache { let root = payload_merkle_root(&p_clone_for_cache); c.put(root, p_clone_for_cache).await; }
+                if let Some(c) = &self.pl_cache {
+                    let root = payload_merkle_root(&p_clone_for_cache);
+                    c.put(root, p_clone_for_cache).await;
+                }
             }
-            _ => { NODE_PERSIST_PAYLOADS_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed); warn!("store.put_payload failed"); }
+            _ => {
+                NODE_PERSIST_PAYLOADS_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed);
+                warn!("store.put_payload failed");
+            }
         }
     }
-    async fn has_payload(&self, root: &[u8;32]) -> bool {
+    async fn has_payload(&self, root: &[u8; 32]) -> bool {
         let r = *root;
         if let Some(c) = &self.pl_cache {
             if c.touch_present(&r).await {
@@ -431,9 +568,12 @@ impl pc_p2p::async_svc::StoreDelegate for NodeDiskStore {
             }
         }
         let store = self.inner.clone();
-        match tokio::task::spawn_blocking(move || store.has_payload(&r)).await { Ok(v) => v, Err(_) => false }
+        match tokio::task::spawn_blocking(move || store.has_payload(&r)).await {
+            Ok(v) => v,
+            Err(_) => false,
+        }
     }
-    async fn get_headers(&self, ids: &[AnchorId]) -> (Vec<AnchorHeader>, Vec<[u8;32]>) {
+    async fn get_headers(&self, ids: &[AnchorId]) -> (Vec<AnchorHeader>, Vec<[u8; 32]>) {
         let mut found: Vec<AnchorHeader> = Vec::new();
         let mut to_fetch: Vec<AnchorId> = Vec::new();
         if let Some(c) = &self.hdr_cache {
@@ -464,23 +604,41 @@ impl pc_p2p::async_svc::StoreDelegate for NodeDiskStore {
                 }
             }
             v
-        }).await { Ok(v) => v, Err(_) => Vec::new() };
+        })
+        .await
+        {
+            Ok(v) => v,
+            Err(_) => Vec::new(),
+        };
         // Cache auffüllen
-        if let Some(c) = &self.hdr_cache { for h in &fetched { let id = AnchorId(h.id_digest()); c.put(id, h.clone()).await; } }
+        if let Some(c) = &self.hdr_cache {
+            for h in &fetched {
+                let id = AnchorId(h.id_digest());
+                c.put(id, h.clone()).await;
+            }
+        }
         // Missing ermitteln
-        let mut missing: Vec<[u8;32]> = Vec::new();
-        let mut seen_ids: std::collections::HashSet<[u8;32]> = std::collections::HashSet::new();
-        for h in &found { seen_ids.insert(h.id_digest()); }
-        for h in &fetched { seen_ids.insert(h.id_digest()); }
-        for id in ids.iter() { if !seen_ids.contains(&id.0) { missing.push(id.0); } }
+        let mut missing: Vec<[u8; 32]> = Vec::new();
+        let mut seen_ids: std::collections::HashSet<[u8; 32]> = std::collections::HashSet::new();
+        for h in &found {
+            seen_ids.insert(h.id_digest());
+        }
+        for h in &fetched {
+            seen_ids.insert(h.id_digest());
+        }
+        for id in ids.iter() {
+            if !seen_ids.contains(&id.0) {
+                missing.push(id.0);
+            }
+        }
         // Zusammenführen
         let mut all_found = found;
         all_found.extend(fetched.into_iter());
         (all_found, missing)
     }
-    async fn get_payloads(&self, roots: &[[u8;32]]) -> (Vec<AnchorPayload>, Vec<[u8;32]>) {
+    async fn get_payloads(&self, roots: &[[u8; 32]]) -> (Vec<AnchorPayload>, Vec<[u8; 32]>) {
         let mut found: Vec<AnchorPayload> = Vec::new();
-        let mut to_fetch: Vec<[u8;32]> = Vec::new();
+        let mut to_fetch: Vec<[u8; 32]> = Vec::new();
         if let Some(c) = &self.pl_cache {
             for r in roots.iter().cloned() {
                 if let Some(p) = c.get_clone(&r).await {
@@ -496,7 +654,7 @@ impl pc_p2p::async_svc::StoreDelegate for NodeDiskStore {
         }
         // Disk-Fetch in einem Blocking-Block
         let store = self.inner.clone();
-        let fetched: Vec<(AnchorPayload, [u8;32])> = match tokio::task::spawn_blocking(move || {
+        let fetched: Vec<(AnchorPayload, [u8; 32])> = match tokio::task::spawn_blocking(move || {
             let mut v = Vec::new();
             for r in to_fetch.iter() {
                 let t0 = std::time::Instant::now();
@@ -509,18 +667,35 @@ impl pc_p2p::async_svc::StoreDelegate for NodeDiskStore {
                 }
             }
             v
-        }).await { Ok(v) => v, Err(_) => Vec::new() };
+        })
+        .await
+        {
+            Ok(v) => v,
+            Err(_) => Vec::new(),
+        };
         // Cache auffüllen
-        if let Some(c) = &self.pl_cache { for (p, r) in &fetched { c.put(*r, p.clone()).await; } }
+        if let Some(c) = &self.pl_cache {
+            for (p, r) in &fetched {
+                c.put(*r, p.clone()).await;
+            }
+        }
         // Missing ermitteln
-        let mut missing: Vec<[u8;32]> = Vec::new();
-        let mut seen_roots: std::collections::HashSet<[u8;32]> = std::collections::HashSet::new();
-        for p in &found { seen_roots.insert(payload_merkle_root(p)); }
-        for (_p, r) in &fetched { seen_roots.insert(*r); }
-        for r in roots.iter() { if !seen_roots.contains(r) { missing.push(*r); } }
+        let mut missing: Vec<[u8; 32]> = Vec::new();
+        let mut seen_roots: std::collections::HashSet<[u8; 32]> = std::collections::HashSet::new();
+        for p in &found {
+            seen_roots.insert(payload_merkle_root(p));
+        }
+        for (_p, r) in &fetched {
+            seen_roots.insert(*r);
+        }
+        for r in roots.iter() {
+            if !seen_roots.contains(r) {
+                missing.push(*r);
+            }
+        }
         // Zusammenführen
         let mut all_found = found;
-        all_found.extend(fetched.into_iter().map(|(p,_r)| p));
+        all_found.extend(fetched.into_iter().map(|(p, _r)| p));
         (all_found, missing)
     }
 
@@ -529,16 +704,20 @@ impl pc_p2p::async_svc::StoreDelegate for NodeDiskStore {
         let mut g = self.txs.lock().await;
         let _ = g.insert(id, tx);
     }
-    async fn has_tx(&self, id: &[u8;32]) -> bool {
+    async fn has_tx(&self, id: &[u8; 32]) -> bool {
         let g = self.txs.lock().await;
         g.contains_key(id)
     }
-    async fn get_txs(&self, ids: &[[u8;32]]) -> (Vec<MicroTx>, Vec<[u8;32]>) {
+    async fn get_txs(&self, ids: &[[u8; 32]]) -> (Vec<MicroTx>, Vec<[u8; 32]>) {
         let g = self.txs.lock().await;
         let mut found = Vec::new();
         let mut missing = Vec::new();
         for id in ids {
-            if let Some(tx) = g.get(id) { found.push(tx.clone()); } else { missing.push(*id); }
+            if let Some(tx) = g.get(id) {
+                found.push(tx.clone());
+            } else {
+                missing.push(*id);
+            }
         }
         (found, missing)
     }
@@ -551,19 +730,33 @@ fn run_consensus_ack_dists(args: &ConsensusAckDistsArgs) -> Result<()> {
     let k_eff = if let Some(ref gpath) = args.genesis {
         let g = load_genesis(gpath)?;
         let k = g.consensus.k;
-        if k == 0 || k > 64 { bail!("invalid k in genesis: {} (must be 1..=64)", k); }
-        println!("{{\"type\":\"genesis_loaded\",\"k\":{},\"commitment\":\"{}\"}}", k, g.commitment);
+        if k == 0 || k > 64 {
+            bail!("invalid k in genesis: {} (must be 1..=64)", k);
+        }
+        println!(
+            "{{\"type\":\"genesis_loaded\",\"k\":{},\"commitment\":\"{}\"}}",
+            k, g.commitment
+        );
         k
     } else {
-        if args.k == 0 || args.k > 64 { bail!("invalid k: {} (must be 1..=64)", args.k); }
-        println!("{{\"type\":\"k_selected\",\"k\":{},\"source\":\"cli\"}}", args.k);
+        if args.k == 0 || args.k > 64 {
+            bail!("invalid k: {} (must be 1..=64)", args.k);
+        }
+        println!(
+            "{{\"type\":\"k_selected\",\"k\":{},\"source\":\"cli\"}}",
+            args.k
+        );
         args.k
     };
     let mut cfg = ConsensusConfig::recommended(k_eff);
-    if let Some(dm) = args.d_max { cfg.fee_params.d_max = dm; }
+    if let Some(dm) = args.d_max {
+        cfg.fee_params.d_max = dm;
+    }
     let dmax_out = cfg.fee_params.d_max;
     let mut eng = ConsensusEngine::new(cfg);
-    for h in headers { let _ = eng.insert_header(h); }
+    for h in headers {
+        let _ = eng.insert_header(h);
+    }
     let dists = eng.ack_distances(AnchorId(ack));
     // Baue JSON deterministisch ohne Format-String-Brace-Escapes
     let mut out = String::new();
@@ -573,8 +766,13 @@ fn run_consensus_ack_dists(args: &ConsensusAckDistsArgs) -> Result<()> {
     out.push_str(&dmax_out.to_string());
     out.push_str(",\"distances\":[");
     for (i, d) in dists.iter().enumerate() {
-        if i > 0 { out.push(','); }
-        match d { Some(v) => out.push_str(&v.to_string()), None => out.push_str("null") }
+        if i > 0 {
+            out.push(',');
+        }
+        match d {
+            Some(v) => out.push_str(&v.to_string()),
+            None => out.push_str("null"),
+        }
     }
     out.push_str("]}");
     println!("{}", out);
@@ -589,21 +787,52 @@ fn run_consensus_payout_root(args: &ConsensusPayoutRootArgs) -> Result<()> {
     let k_eff = if let Some(ref gpath) = args.genesis {
         let g = load_genesis(gpath)?;
         let k = g.consensus.k;
-        if k == 0 || k > 64 { bail!("invalid k in genesis: {} (must be 1..=64)", k); }
-        println!("{{\"type\":\"genesis_loaded\",\"k\":{},\"commitment\":\"{}\"}}", k, g.commitment);
+        if k == 0 || k > 64 {
+            bail!("invalid k in genesis: {} (must be 1..=64)", k);
+        }
+        println!(
+            "{{\"type\":\"genesis_loaded\",\"k\":{},\"commitment\":\"{}\"}}",
+            k, g.commitment
+        );
         k
     } else {
-        if args.k == 0 || args.k > 64 { bail!("invalid k: {} (must be 1..=64)", args.k); }
-        println!("{{\"type\":\"k_selected\",\"k\":{},\"source\":\"cli\"}}", args.k);
+        if args.k == 0 || args.k > 64 {
+            bail!("invalid k: {} (must be 1..=64)", args.k);
+        }
+        println!(
+            "{{\"type\":\"k_selected\",\"k\":{},\"source\":\"cli\"}}",
+            args.k
+        );
         args.k
     };
-    if recipients.len() != k_eff as usize { bail!("recipients length ({}) must equal k ({})", recipients.len(), k_eff); }
-    if args.proposer_index >= recipients.len() { bail!("proposer_index {} out of range (k={})", args.proposer_index, recipients.len()); }
+    if recipients.len() != k_eff as usize {
+        bail!(
+            "recipients length ({}) must equal k ({})",
+            recipients.len(),
+            k_eff
+        );
+    }
+    if args.proposer_index >= recipients.len() {
+        bail!(
+            "proposer_index {} out of range (k={})",
+            args.proposer_index,
+            recipients.len()
+        );
+    }
     let mut cfg = ConsensusConfig::recommended(k_eff);
-    if let Some(dm) = args.d_max { cfg.fee_params.d_max = dm; }
+    if let Some(dm) = args.d_max {
+        cfg.fee_params.d_max = dm;
+    }
     let mut eng = ConsensusEngine::new(cfg);
-    for h in headers { let _ = eng.insert_header(h); }
-    let root = eng.committee_payout_root_for_ack(args.fees, &recipients, args.proposer_index, AnchorId(ack))?;
+    for h in headers {
+        let _ = eng.insert_header(h);
+    }
+    let root = eng.committee_payout_root_for_ack(
+        args.fees,
+        &recipients,
+        args.proposer_index,
+        AnchorId(ack),
+    )?;
     println!("{}", hex::encode(root));
     Ok(())
 }
@@ -690,8 +919,19 @@ struct RateArgs {
 }
 
 fn rate_cfg_opt(r: &RateArgs) -> Option<RateLimitConfig> {
-    let any = r.hdr_capacity.is_some() || r.hdr_refill_per_sec.is_some() || r.inv_capacity.is_some() || r.inv_refill_per_sec.is_some() || r.req_capacity.is_some() || r.req_refill_per_sec.is_some() || r.resp_capacity.is_some() || r.resp_refill_per_sec.is_some() || r.per_peer.is_some() || r.peer_ttl_secs.is_some();
-    if !any { return None; }
+    let any = r.hdr_capacity.is_some()
+        || r.hdr_refill_per_sec.is_some()
+        || r.inv_capacity.is_some()
+        || r.inv_refill_per_sec.is_some()
+        || r.req_capacity.is_some()
+        || r.req_refill_per_sec.is_some()
+        || r.resp_capacity.is_some()
+        || r.resp_refill_per_sec.is_some()
+        || r.per_peer.is_some()
+        || r.peer_ttl_secs.is_some();
+    if !any {
+        return None;
+    }
     Some(RateLimitConfig {
         hdr_capacity: r.hdr_capacity.unwrap_or(0),
         hdr_refill_per_sec: r.hdr_refill_per_sec.unwrap_or(0),
@@ -800,25 +1040,39 @@ struct NodeConfig {
 }
 
 #[derive(Debug, Deserialize)]
-struct ConsensusCfg { k: Option<u8> }
+struct ConsensusCfg {
+    k: Option<u8>,
+}
 
 #[derive(Debug, Deserialize)]
-struct NodeSection { cache: Option<CacheCfg> }
+struct NodeSection {
+    cache: Option<CacheCfg>,
+}
 
 #[derive(Debug, Deserialize)]
-struct CacheCfg { header_cap: Option<usize>, payload_cap: Option<usize> }
+struct CacheCfg {
+    header_cap: Option<usize>,
+    payload_cap: Option<usize>,
+}
 
 fn load_node_config(path: &str) -> Result<NodeConfig> {
     let s = std::fs::read_to_string(path).map_err(|e| anyhow!("read config '{}': {}", path, e))?;
-    let cfg: NodeConfig = toml::from_str(&s).map_err(|e| anyhow!("parse toml '{}': {}", path, e))?;
+    let cfg: NodeConfig =
+        toml::from_str(&s).map_err(|e| anyhow!("parse toml '{}': {}", path, e))?;
     Ok(cfg)
 }
 
 #[derive(Debug, Deserialize)]
-struct Genesis { consensus: GenesisConsensus, genesis_note: String, commitment: String }
+struct Genesis {
+    consensus: GenesisConsensus,
+    genesis_note: String,
+    commitment: String,
+}
 
 #[derive(Debug, Deserialize)]
-struct GenesisConsensus { k: u8 }
+struct GenesisConsensus {
+    k: u8,
+}
 
 fn load_genesis(path: &str) -> Result<Genesis> {
     let s = std::fs::read_to_string(path).map_err(|e| anyhow!("read genesis '{}': {}", path, e))?;
@@ -828,7 +1082,11 @@ fn load_genesis(path: &str) -> Result<Genesis> {
     let got = blake3_32(&note);
     let want = parse_hex32(&g.commitment)?;
     if got != want {
-        bail!("genesis commitment mismatch: computed={}, expected={}", hex::encode(got), g.commitment);
+        bail!(
+            "genesis commitment mismatch: computed={}, expected={}",
+            hex::encode(got),
+            g.commitment
+        );
     }
     Ok(g)
 }
@@ -853,21 +1111,30 @@ fn run_p2p_run(args: &P2pRunArgs) -> Result<()> {
         .build()
         .map_err(|e| anyhow!("failed to build tokio runtime: {e}"))?;
     rt.block_on(async move {
-        use pc_p2p::P2pConfig;
         use pc_p2p::async_svc as p2p_async;
-        let cfg = P2pConfig { max_peers: args.max_peers, rate: rate_cfg_opt(&args.rate) };
+        use pc_p2p::P2pConfig;
+        let cfg = P2pConfig {
+            max_peers: args.max_peers,
+            rate: rate_cfg_opt(&args.rate),
+        };
         let (svc, mut out_rx, handle) = p2p_async::spawn(cfg);
         let print_task = tokio::spawn(async move {
             while let Some(msg) = out_rx.recv().await {
                 outbox_deq_inc();
                 match msg {
                     P2pMessage::HeaderAnnounce(h) => {
-                        println!("{{\"type\":\"header_announce\",\"creator\":{},\"id\":\"{}\"}}", h.creator_index, hex::encode(h.id_digest()));
+                        println!(
+                            "{{\"type\":\"header_announce\",\"creator\":{},\"id\":\"{}\"}}",
+                            h.creator_index,
+                            hex::encode(h.id_digest())
+                        );
                     }
                     P2pMessage::HeadersInv { ids } => {
                         let mut out = String::from("{\"type\":\"headers_inv\",\"ids\":[");
                         for (i, id) in ids.iter().enumerate() {
-                            if i > 0 { out.push(','); }
+                            if i > 0 {
+                                out.push(',');
+                            }
                             out.push('"');
                             out.push_str(&hex::encode(id.0));
                             out.push('"');
@@ -879,7 +1146,9 @@ fn run_p2p_run(args: &P2pRunArgs) -> Result<()> {
                         // JSON-Ausgabe sicher zusammenbauen
                         let mut out = String::from("{\"type\":\"payload_inv\",\"roots\":[");
                         for (i, r) in roots.iter().enumerate() {
-                            if i > 0 { out.push(','); }
+                            if i > 0 {
+                                out.push(',');
+                            }
                             out.push('"');
                             out.push_str(&hex::encode(r));
                             out.push('"');
@@ -890,7 +1159,9 @@ fn run_p2p_run(args: &P2pRunArgs) -> Result<()> {
                     P2pMessage::TxInv { ids } => {
                         let mut out = String::from("{\"type\":\"tx_inv\",\"ids\":[");
                         for (i, id) in ids.iter().enumerate() {
-                            if i > 0 { out.push(','); }
+                            if i > 0 {
+                                out.push(',');
+                            }
                             out.push('"');
                             out.push_str(&hex::encode(id));
                             out.push('"');
@@ -916,24 +1187,31 @@ fn run_p2p_run(args: &P2pRunArgs) -> Result<()> {
         }
         svc.shutdown().await?;
         let _ = print_task.await;
-        let res = handle.await.map_err(|e| anyhow!("p2p task join error: {e}"))?;
+        let res = handle
+            .await
+            .map_err(|e| anyhow!("p2p task join error: {e}"))?;
         res.map_err(|e| anyhow!("p2p loop error: {e}"))
     })
 }
 
-fn read_hex32_files_in(dir: &std::path::Path, max_n: usize) -> Result<Vec<[u8;32]>> {
+fn read_hex32_files_in(dir: &std::path::Path, max_n: usize) -> Result<Vec<[u8; 32]>> {
     let mut out = Vec::new();
-    if !dir.exists() { return Ok(out); }
+    if !dir.exists() {
+        return Ok(out);
+    }
     for entry in std::fs::read_dir(dir)? {
         let p = entry?.path();
         if let Some(name) = p.file_stem().and_then(|s| s.to_str()) {
-            if name.len() == 64 { // 32 bytes hex
+            if name.len() == 64 {
+                // 32 bytes hex
                 if let Ok(bytes) = hex::decode(name) {
                     if bytes.len() == 32 {
-                        let mut arr = [0u8;32];
+                        let mut arr = [0u8; 32];
                         arr.copy_from_slice(&bytes);
                         out.push(arr);
-                        if out.len() >= max_n { break; }
+                        if out.len() >= max_n {
+                            break;
+                        }
                     }
                 }
             }
@@ -1199,15 +1477,19 @@ fn run_da_run(args: &DaRunArgs) -> Result<()> {
         .build()
         .map_err(|e| anyhow!("failed to build tokio runtime: {e}"))?;
     rt.block_on(async move {
-        use pc_da::{DaConfig};
         use pc_da::async_svc as da_async;
-        let cfg = DaConfig { max_chunks: args.max_chunks };
+        use pc_da::DaConfig;
+        let cfg = DaConfig {
+            max_chunks: args.max_chunks,
+        };
         let (svc, handle) = da_async::spawn(cfg);
         if let Err(e) = tokio::signal::ctrl_c().await {
             return Err(anyhow!("failed to listen for ctrl_c: {e}"));
         }
         svc.shutdown().await?;
-        let res = handle.await.map_err(|e| anyhow!("da task join error: {e}"))?;
+        let res = handle
+            .await
+            .map_err(|e| anyhow!("da task join error: {e}"))?;
         res.map_err(|e| anyhow!("da loop error: {e}"))
     })
 }
@@ -1219,12 +1501,15 @@ fn run_graph_insert_and_ack(args: &GraphInsertAndAckArgs) -> Result<()> {
         .map_err(|e| anyhow!("cannot open headers_file '{}': {e}", &args.headers_file))?;
     let mut buf = Vec::new();
     use std::io::Read as _;
-    f.read_to_end(&mut buf).map_err(|e| anyhow!("cannot read headers_file '{}': {e}", &args.headers_file))?;
+    f.read_to_end(&mut buf)
+        .map_err(|e| anyhow!("cannot read headers_file '{}': {e}", &args.headers_file))?;
     let mut slice = &buf[..];
     let headers: Vec<AnchorHeader> = pc_codec::Decodable::decode(&mut slice)
         .map_err(|e| anyhow!("failed to decode Vec<AnchorHeader>: {e}"))?;
 
-    let d_max = args.d_max.unwrap_or_else(|| FeeSplitParams::recommended().d_max);
+    let d_max = args
+        .d_max
+        .unwrap_or_else(|| FeeSplitParams::recommended().d_max);
 
     let mut cache = AnchorGraphCache::new();
     for h in headers {
@@ -1237,8 +1522,20 @@ fn run_graph_insert_and_ack(args: &GraphInsertAndAckArgs) -> Result<()> {
     if let (Some(fees), Some(prop_idx)) = (args.fees, args.proposer_index) {
         if !args.recipients.is_empty() {
             let recipients = parse_hex32_list(&args.recipients)?;
-            if recipients.len() != args.k as usize { bail!("recipients length ({}) must equal k ({})", recipients.len(), args.k); }
-            if prop_idx >= recipients.len() { bail!("proposer_index {} out of range (k={})", prop_idx, recipients.len()); }
+            if recipients.len() != args.k as usize {
+                bail!(
+                    "recipients length ({}) must equal k ({})",
+                    recipients.len(),
+                    args.k
+                );
+            }
+            if prop_idx >= recipients.len() {
+                bail!(
+                    "proposer_index {} out of range (k={})",
+                    prop_idx,
+                    recipients.len()
+                );
+            }
             let params = FeeSplitParams::recommended();
             let set = compute_committee_payout(fees, &params, &recipients, prop_idx, &dists)
                 .map_err(|e| anyhow!("committee payout failed: {e}"))?;
@@ -1249,8 +1546,13 @@ fn run_graph_insert_and_ack(args: &GraphInsertAndAckArgs) -> Result<()> {
     // JSON-Ausgabe
     print!("{{\"k\":{},\"d_max\":{},\"distances\":[", args.k, d_max);
     for (i, d) in dists.iter().enumerate() {
-        if i > 0 { print!(","); }
-        match d { Some(v) => print!("{}", v), None => print!("null") }
+        if i > 0 {
+            print!(",");
+        }
+        match d {
+            Some(v) => print!("{}", v),
+            None => print!("null"),
+        }
     }
     if let Some(root) = payout_root_hex {
         println!("],\"committee_payout_root\":\"{}\"}}", root);
@@ -1319,8 +1621,8 @@ struct DaRunArgs {
 }
 
 fn load_vec_decodable<T: pc_codec::Decodable>(path: &str) -> Result<Vec<T>> {
-    let mut f = std::fs::File::open(path)
-        .map_err(|e| anyhow!("cannot open file '{}': {e}", path))?;
+    let mut f =
+        std::fs::File::open(path).map_err(|e| anyhow!("cannot open file '{}': {e}", path))?;
     let mut buf = Vec::new();
     use std::io::Read as _;
     f.read_to_end(&mut buf)
@@ -1333,21 +1635,34 @@ fn load_vec_decodable<T: pc_codec::Decodable>(path: &str) -> Result<Vec<T>> {
 
 fn run_build_payload(args: &BuildPayloadArgs) -> Result<()> {
     // Events ggf. laden
-    let mut micro_txs: Vec<MicroTx> = if let Some(p) = &args.microtx_file { load_vec_decodable(p)? } else { Vec::new() };
+    let mut micro_txs: Vec<MicroTx> = if let Some(p) = &args.microtx_file {
+        load_vec_decodable(p)?
+    } else {
+        Vec::new()
+    };
     // Optional: Mempool lesen und anhängen (deterministisch sortieren, deduplizieren, cap)
     if args.from_mempool {
-        let base = args.store_dir.clone().unwrap_or_else(|| "pc-data".to_string());
+        let base = args
+            .store_dir
+            .clone()
+            .unwrap_or_else(|| "pc-data".to_string());
         let mp_dir = std::path::Path::new(&base).join("mempool");
         if let Ok(rd) = std::fs::read_dir(&mp_dir) {
             for ent in rd.flatten() {
-                if let Ok(meta) = ent.metadata() { if !meta.is_file() { continue; } }
+                if let Ok(meta) = ent.metadata() {
+                    if !meta.is_file() {
+                        continue;
+                    }
+                }
                 if let Ok(mut f) = std::fs::File::open(ent.path()) {
                     let mut buf = Vec::new();
                     use std::io::Read as _;
                     if f.read_to_end(&mut buf).is_ok() {
                         let mut s = &buf[..];
                         if let Ok(tx) = MicroTx::decode(&mut s) {
-                            if validate_microtx_sanity(&tx).is_ok() { micro_txs.push(tx); }
+                            if validate_microtx_sanity(&tx).is_ok() {
+                                micro_txs.push(tx);
+                            }
                         }
                     }
                 }
@@ -1355,19 +1670,35 @@ fn run_build_payload(args: &BuildPayloadArgs) -> Result<()> {
         }
         // Dedupe + Sort + Cap
         use std::collections::HashSet;
-        let mut seen: HashSet<[u8;32]> = HashSet::new();
+        let mut seen: HashSet<[u8; 32]> = HashSet::new();
         let mut uniq: Vec<MicroTx> = Vec::with_capacity(micro_txs.len());
         for tx in micro_txs.into_iter() {
             let id = digest_microtx(&tx);
-            if seen.insert(id) { uniq.push(tx); }
+            if seen.insert(id) {
+                uniq.push(tx);
+            }
         }
-        uniq.sort_unstable_by(|a,b| digest_microtx(a).cmp(&digest_microtx(b)));
-        if uniq.len() > MAX_PAYLOAD_MICROTX { uniq.truncate(MAX_PAYLOAD_MICROTX); }
+        uniq.sort_unstable_by(|a, b| digest_microtx(a).cmp(&digest_microtx(b)));
+        if uniq.len() > MAX_PAYLOAD_MICROTX {
+            uniq.truncate(MAX_PAYLOAD_MICROTX);
+        }
         micro_txs = uniq;
     }
-    let mints: Vec<MintEvent> = if let Some(p) = &args.mints_file { load_vec_decodable(p)? } else { Vec::new() };
-    let claims: Vec<ClaimEvent> = if let Some(p) = &args.claims_file { load_vec_decodable(p)? } else { Vec::new() };
-    let evidences: Vec<EvidenceEvent> = if let Some(p) = &args.evidences_file { load_vec_decodable(p)? } else { Vec::new() };
+    let mints: Vec<MintEvent> = if let Some(p) = &args.mints_file {
+        load_vec_decodable(p)?
+    } else {
+        Vec::new()
+    };
+    let claims: Vec<ClaimEvent> = if let Some(p) = &args.claims_file {
+        load_vec_decodable(p)?
+    } else {
+        Vec::new()
+    };
+    let evidences: Vec<EvidenceEvent> = if let Some(p) = &args.evidences_file {
+        load_vec_decodable(p)?
+    } else {
+        Vec::new()
+    };
 
     // Payout-Root bestimmen
     let payout_root = if let Some(payout_path) = &args.payout_file {
@@ -1376,23 +1707,55 @@ fn run_build_payload(args: &BuildPayloadArgs) -> Result<()> {
         set.payout_root()
     } else {
         // via Fees/Recipients/Acks/Attestors
-        let fees = args.fees.ok_or_else(|| anyhow!("missing --fees when --payout_file is not provided"))?;
-        let proposer_index = args.proposer_index.ok_or_else(|| anyhow!("missing --proposer-index when --payout_file is not provided"))?;
+        let fees = args
+            .fees
+            .ok_or_else(|| anyhow!("missing --fees when --payout_file is not provided"))?;
+        let proposer_index = args.proposer_index.ok_or_else(|| {
+            anyhow!("missing --proposer-index when --payout_file is not provided")
+        })?;
         let recipients = parse_hex32_list(&args.recipients)?;
         let acks = parse_acks(&args.acks)?;
         let attestors = parse_hex32_list(&args.attestors)?;
-        if recipients.len() != acks.len() { bail!("recipients ({}) and acks ({}) length mismatch", recipients.len(), acks.len()); }
-        if proposer_index >= recipients.len() { bail!("proposer_index {} out of range (k={})", proposer_index, recipients.len()); }
+        if recipients.len() != acks.len() {
+            bail!(
+                "recipients ({}) and acks ({}) length mismatch",
+                recipients.len(),
+                acks.len()
+            );
+        }
+        if proposer_index >= recipients.len() {
+            bail!(
+                "proposer_index {} out of range (k={})",
+                proposer_index,
+                recipients.len()
+            );
+        }
         let params = FeeSplitParams::recommended();
-        compute_total_payout_root(fees, &params, &recipients, proposer_index, &acks, &attestors)?
+        compute_total_payout_root(
+            fees,
+            &params,
+            &recipients,
+            proposer_index,
+            &acks,
+            &attestors,
+        )?
     };
 
-    let payload = AnchorPayload { version:1, micro_txs, mints, claims, evidences, payout_root };
+    let payload = AnchorPayload {
+        version: 1,
+        micro_txs,
+        mints,
+        claims,
+        evidences,
+        payout_root,
+    };
     let root = compute_payload_hash(&payload);
     println!("{}", hex::encode(root));
     if let Some(out) = &args.out_file {
         let mut buf = Vec::with_capacity(payload.encoded_len());
-        payload.encode(&mut buf).map_err(|e| anyhow!("encode payload failed: {e}"))?;
+        payload
+            .encode(&mut buf)
+            .map_err(|e| anyhow!("encode payload failed: {e}"))?;
         std::fs::write(out, &buf).map_err(|e| anyhow!("write out_file failed: {e}"))?;
     }
     Ok(())
@@ -1444,7 +1807,12 @@ struct BuildPayloadArgs {
 }
 
 #[derive(Debug, Clone, Parser)]
-#[command(name = "phantom-node", version, about = "PhantomCoin Fullnode/Validator/Miner", disable_help_subcommand = true)]
+#[command(
+    name = "phantom-node",
+    version,
+    about = "PhantomCoin Fullnode/Validator/Miner",
+    disable_help_subcommand = true
+)]
 struct NodeOpts {
     /// Aktiviere Fullnode-Rolle
     #[arg(long, default_value_t = true)]
@@ -1547,15 +1915,19 @@ fn compute_payload_hash(payload: &AnchorPayload) -> pc_crypto::Hash32 {
 
 fn parse_hex32(s: &str) -> Result<[u8; 32]> {
     let bytes = hex::decode(s).map_err(|e| anyhow!("invalid hex for 32-byte id: {e}"))?;
-    if bytes.len() != 32 { bail!("expected 32 bytes, got {}", bytes.len()); }
+    if bytes.len() != 32 {
+        bail!("expected 32 bytes, got {}", bytes.len());
+    }
     let mut arr = [0u8; 32];
     arr.copy_from_slice(&bytes);
     Ok(arr)
 }
 
-fn parse_hex32_list(v: &[String]) -> Result<Vec<[u8;32]>> {
+fn parse_hex32_list(v: &[String]) -> Result<Vec<[u8; 32]>> {
     let mut out = Vec::with_capacity(v.len());
-    for s in v { out.push(parse_hex32(s)?); }
+    for s in v {
+        out.push(parse_hex32(s)?);
+    }
     Ok(out)
 }
 
@@ -1563,8 +1935,14 @@ fn parse_acks(v: &[String]) -> Result<Vec<Option<u8>>> {
     let mut out = Vec::with_capacity(v.len());
     for s in v {
         let t = s.trim();
-        if t.is_empty() || t.eq_ignore_ascii_case("none") || t == "-" { out.push(None); }
-        else { out.push(Some(t.parse::<u8>().map_err(|e| anyhow!("invalid ack distance '{t}': {e}"))?)); }
+        if t.is_empty() || t.eq_ignore_ascii_case("none") || t == "-" {
+            out.push(None);
+        } else {
+            out.push(Some(
+                t.parse::<u8>()
+                    .map_err(|e| anyhow!("invalid ack distance '{t}': {e}"))?,
+            ));
+        }
     }
     Ok(out)
 }
@@ -1573,24 +1951,50 @@ fn run_payout_root(args: &PayoutArgs) -> Result<()> {
     let recipients = parse_hex32_list(&args.recipients)?;
     let acks = parse_acks(&args.acks)?;
     let attestors = parse_hex32_list(&args.attestors)?;
-    if recipients.len() != acks.len() { bail!("recipients ({}) and acks ({}) length mismatch", recipients.len(), acks.len()); }
-    if args.proposer_index >= recipients.len() { bail!("proposer_index {} out of range (k={})", args.proposer_index, recipients.len()); }
+    if recipients.len() != acks.len() {
+        bail!(
+            "recipients ({}) and acks ({}) length mismatch",
+            recipients.len(),
+            acks.len()
+        );
+    }
+    if args.proposer_index >= recipients.len() {
+        bail!(
+            "proposer_index {} out of range (k={})",
+            args.proposer_index,
+            recipients.len()
+        );
+    }
     let params = FeeSplitParams::recommended();
-    let root = compute_total_payout_root(args.fees, &params, &recipients, args.proposer_index, &acks, &attestors)?;
+    let root = compute_total_payout_root(
+        args.fees,
+        &params,
+        &recipients,
+        args.proposer_index,
+        &acks,
+        &attestors,
+    )?;
     println!("{}", hex::encode(root));
     Ok(())
 }
 
 fn run_committee_payout_from_headers(args: &CommitteePayoutHeadersArgs) -> Result<()> {
     let recipients = parse_hex32_list(&args.recipients)?;
-    if args.proposer_index >= recipients.len() { bail!("proposer_index {} out of range (k={})", args.proposer_index, recipients.len()); }
+    if args.proposer_index >= recipients.len() {
+        bail!(
+            "proposer_index {} out of range (k={})",
+            args.proposer_index,
+            recipients.len()
+        );
+    }
     let ack = parse_hex32(&args.ack_id)?;
     // Datei laden
     let mut f = std::fs::File::open(&args.headers_file)
         .map_err(|e| anyhow!("cannot open headers_file '{}': {e}", &args.headers_file))?;
     let mut buf = Vec::new();
     use std::io::Read as _;
-    f.read_to_end(&mut buf).map_err(|e| anyhow!("cannot read headers_file '{}': {e}", &args.headers_file))?;
+    f.read_to_end(&mut buf)
+        .map_err(|e| anyhow!("cannot read headers_file '{}': {e}", &args.headers_file))?;
     let mut slice = &buf[..];
     let headers: Vec<AnchorHeader> = pc_codec::Decodable::decode(&mut slice)
         .map_err(|e| anyhow!("failed to decode Vec<AnchorHeader>: {e}"))?;
@@ -1614,17 +2018,25 @@ fn run_graph_ack(args: &GraphAckArgs) -> Result<()> {
         .map_err(|e| anyhow!("cannot open headers_file '{}': {e}", &args.headers_file))?;
     let mut buf = Vec::new();
     use std::io::Read as _;
-    f.read_to_end(&mut buf).map_err(|e| anyhow!("cannot read headers_file '{}': {e}", &args.headers_file))?;
+    f.read_to_end(&mut buf)
+        .map_err(|e| anyhow!("cannot read headers_file '{}': {e}", &args.headers_file))?;
     let mut slice = &buf[..];
     let headers: Vec<AnchorHeader> = pc_codec::Decodable::decode(&mut slice)
         .map_err(|e| anyhow!("failed to decode Vec<AnchorHeader>: {e}"))?;
-    let d_max = args.d_max.unwrap_or_else(|| FeeSplitParams::recommended().d_max);
+    let d_max = args
+        .d_max
+        .unwrap_or_else(|| FeeSplitParams::recommended().d_max);
     let dists = compute_ack_distances_for_seats(AnchorId(ack), &headers, args.k, d_max);
     // JSON Ausgabe minimal, ohne externe Abhängigkeit
     print!("{{\"k\":{},\"d_max\":{},\"distances\":[", args.k, d_max);
     for (i, d) in dists.iter().enumerate() {
-        if i > 0 { print!(","); }
-        match d { Some(v) => print!("{}", v), None => print!("null") }
+        if i > 0 {
+            print!(",");
+        }
+        match d {
+            Some(v) => print!("{}", v),
+            None => print!("null"),
+        }
     }
     println!("]}}");
     Ok(())
@@ -1642,7 +2054,9 @@ fn print_p2p_json(msg: &P2pMessage) {
         P2pMessage::HeadersInv { ids } => {
             let mut out = String::from("{\"type\":\"headers_inv\",\"ids\":[");
             for (i, id) in ids.iter().enumerate() {
-                if i > 0 { out.push(','); }
+                if i > 0 {
+                    out.push(',');
+                }
                 out.push('"');
                 out.push_str(&hex::encode(id.0));
                 out.push('"');
@@ -1653,7 +2067,9 @@ fn print_p2p_json(msg: &P2pMessage) {
         P2pMessage::PayloadInv { roots } => {
             let mut out = String::from("{\"type\":\"payload_inv\",\"roots\":[");
             for (i, r) in roots.iter().enumerate() {
-                if i > 0 { out.push(','); }
+                if i > 0 {
+                    out.push(',');
+                }
                 out.push('"');
                 out.push_str(&hex::encode(r));
                 out.push('"');
@@ -1664,7 +2080,9 @@ fn print_p2p_json(msg: &P2pMessage) {
         P2pMessage::TxInv { ids } => {
             let mut out = String::from("{\"type\":\"tx_inv\",\"ids\":[");
             for (i, id) in ids.iter().enumerate() {
-                if i > 0 { out.push(','); }
+                if i > 0 {
+                    out.push(',');
+                }
                 out.push('"');
                 out.push_str(&hex::encode(id));
                 out.push('"');
@@ -2192,9 +2610,12 @@ fn run_p2p_quic_connect(args: &P2pQuicConnectArgs) -> Result<()> {
         .build()
         .map_err(|e| anyhow!("failed to build tokio runtime: {e}"))?;
     rt.block_on(async move {
-        use pc_p2p::P2pConfig;
         use pc_p2p::async_svc as p2p_async;
-        let cfg = P2pConfig { max_peers: 256, rate: None };
+        use pc_p2p::P2pConfig;
+        let cfg = P2pConfig {
+            max_peers: 256,
+            rate: None,
+        };
         let (svc, mut out_rx, handle) = p2p_async::spawn(cfg);
         let addr: SocketAddr = args
             .addr
@@ -2237,18 +2658,30 @@ fn run_p2p_inject_headers(args: &P2pInjectHeadersArgs) -> Result<()> {
         .build()
         .map_err(|e| anyhow!("failed to build tokio runtime: {e}"))?;
     rt.block_on(async move {
-        let addr: SocketAddr = args.addr.parse().map_err(|e| anyhow!("invalid addr '{}': {e}", &args.addr))?;
-        let cert_der = std::fs::read(&args.cert_file).map_err(|e| anyhow!("read cert_file '{}': {e}", &args.cert_file))?;
-        let client_cfg = client_config_from_cert(&cert_der).map_err(|e| anyhow!("client config from cert failed: {e}"))?;
-        let conn = connect(addr, client_cfg).await.map_err(|e| anyhow!("quic connect failed: {e}"))?;
+        let addr: SocketAddr = args
+            .addr
+            .parse()
+            .map_err(|e| anyhow!("invalid addr '{}': {e}", &args.addr))?;
+        let cert_der = std::fs::read(&args.cert_file)
+            .map_err(|e| anyhow!("read cert_file '{}': {e}", &args.cert_file))?;
+        let client_cfg = client_config_from_cert(&cert_der)
+            .map_err(|e| anyhow!("client config from cert failed: {e}"))?;
+        let conn = connect(addr, client_cfg)
+            .await
+            .map_err(|e| anyhow!("quic connect failed: {e}"))?;
         let sink = QuicClientSink::new(conn);
         let headers: Vec<AnchorHeader> = load_vec_decodable(&args.headers_file)?;
         let mut sent = 0usize;
         for h in headers.into_iter() {
-            sink.deliver(P2pMessage::HeaderAnnounce(h)).await.map_err(|e| anyhow!("deliver header_announce failed: {e}"))?;
+            sink.deliver(P2pMessage::HeaderAnnounce(h))
+                .await
+                .map_err(|e| anyhow!("deliver header_announce failed: {e}"))?;
             sent += 1;
         }
-        println!("{{\"type\":\"inject\",\"kind\":\"headers\",\"count\":{}}}", sent);
+        println!(
+            "{{\"type\":\"inject\",\"kind\":\"headers\",\"count\":{}}}",
+            sent
+        );
         Ok(())
     })
 }
@@ -2259,19 +2692,37 @@ fn run_p2p_inject_payloads(args: &P2pInjectPayloadsArgs) -> Result<()> {
         .build()
         .map_err(|e| anyhow!("failed to build tokio runtime: {e}"))?;
     rt.block_on(async move {
-        let addr: SocketAddr = args.addr.parse().map_err(|e| anyhow!("invalid addr '{}': {e}", &args.addr))?;
-        let cert_der = std::fs::read(&args.cert_file).map_err(|e| anyhow!("read cert_file '{}': {e}", &args.cert_file))?;
-        let client_cfg = client_config_from_cert(&cert_der).map_err(|e| anyhow!("client config from cert failed: {e}"))?;
-        let conn = connect(addr, client_cfg).await.map_err(|e| anyhow!("quic connect failed: {e}"))?;
+        let addr: SocketAddr = args
+            .addr
+            .parse()
+            .map_err(|e| anyhow!("invalid addr '{}': {e}", &args.addr))?;
+        let cert_der = std::fs::read(&args.cert_file)
+            .map_err(|e| anyhow!("read cert_file '{}': {e}", &args.cert_file))?;
+        let client_cfg = client_config_from_cert(&cert_der)
+            .map_err(|e| anyhow!("client config from cert failed: {e}"))?;
+        let conn = connect(addr, client_cfg)
+            .await
+            .map_err(|e| anyhow!("quic connect failed: {e}"))?;
         let sink = QuicClientSink::new(conn);
         let payloads: Vec<AnchorPayload> = load_vec_decodable(&args.payloads_file)?;
         let mut roots = Vec::with_capacity(payloads.len());
-        for p in &payloads { roots.push(payload_merkle_root(p)); }
-        sink.deliver(P2pMessage::PayloadInv { roots: roots.clone() }).await.map_err(|e| anyhow!("deliver payload_inv failed: {e}"))?;
-        if args.with_payloads {
-            sink.deliver(P2pMessage::Resp(RespMsg::Payloads { payloads })).await.map_err(|e| anyhow!("deliver payloads failed: {e}"))?;
+        for p in &payloads {
+            roots.push(payload_merkle_root(p));
         }
-        println!("{{\"type\":\"inject\",\"kind\":\"payloads\",\"roots\":{}}}", roots.len());
+        sink.deliver(P2pMessage::PayloadInv {
+            roots: roots.clone(),
+        })
+        .await
+        .map_err(|e| anyhow!("deliver payload_inv failed: {e}"))?;
+        if args.with_payloads {
+            sink.deliver(P2pMessage::Resp(RespMsg::Payloads { payloads }))
+                .await
+                .map_err(|e| anyhow!("deliver payloads failed: {e}"))?;
+        }
+        println!(
+            "{{\"type\":\"inject\",\"kind\":\"payloads\",\"roots\":{}}}",
+            roots.len()
+        );
         Ok(())
     })
 }
@@ -2279,14 +2730,30 @@ fn run_p2p_inject_payloads(args: &P2pInjectPayloadsArgs) -> Result<()> {
 fn self_check() -> Result<()> {
     // Build a minimal header and compute its id
     let mut parents = ParentList::default();
-    parents.push(AnchorId([0u8;32]))?;
-    let header = AnchorHeader { version:1, shard_id:0, parents, payload_hash:[0u8;32], creator_index:0, vote_mask:0, ack_present:false, ack_id: AnchorId([0u8;32]) };
+    parents.push(AnchorId([0u8; 32]))?;
+    let header = AnchorHeader {
+        version: 1,
+        shard_id: 0,
+        parents,
+        payload_hash: [0u8; 32],
+        creator_index: 0,
+        vote_mask: 0,
+        ack_present: false,
+        ack_id: AnchorId([0u8; 32]),
+    };
     let id = header.id_digest();
     info!(hash = %hex::encode(id), "anchor header digest computed");
 
     // Payload-Hash (leer) deterministisch berechnen
     let empty_payout = PayoutSet { entries: vec![] };
-    let payload = AnchorPayload { version:1, micro_txs: vec![], mints: vec![], claims: vec![], evidences: vec![], payout_root: empty_payout.payout_root() };
+    let payload = AnchorPayload {
+        version: 1,
+        micro_txs: vec![],
+        mints: vec![],
+        claims: vec![],
+        evidences: vec![],
+        payout_root: empty_payout.payout_root(),
+    };
     let ph = compute_payload_hash(&payload);
     info!(payload_root = %hex::encode(ph), "payload merkle root computed");
 
@@ -2295,7 +2762,12 @@ fn self_check() -> Result<()> {
     let t = finality_threshold(k);
     let mask = set_bit(0, 0)?;
     let pc = popcount_u64(mask);
-    warn!(k, threshold = t, popcount = pc, "consensus threshold sample");
+    warn!(
+        k,
+        threshold = t,
+        popcount = pc,
+        "consensus threshold sample"
+    );
     let f = is_final(pc, k);
     info!(finalized = f, "finality check (expected false)");
     Ok(())
@@ -2307,22 +2779,70 @@ fn main() -> Result<()> {
     info!(?opts, "starting phantom-node roles");
     if let Some(cmd) = &opts.command {
         match cmd {
-            Command::PayoutRoot(args) => { run_payout_root(args)?; return Ok(()); }
-            Command::CommitteePayoutFromHeaders(args) => { run_committee_payout_from_headers(args)?; return Ok(()); }
-            Command::BuildPayload(args) => { run_build_payload(args)?; return Ok(()); }
-            Command::GraphAck(args) => { run_graph_ack(args)?; return Ok(()); }
-            Command::GraphInsertAndAck(args) => { run_graph_insert_and_ack(args)?; return Ok(()); }
-            Command::P2pRun(args) => { run_p2p_run(args)?; return Ok(()); }
-            Command::DaRun(args) => { run_da_run(args)?; return Ok(()); }
-            Command::P2pQuicListen(args) => { run_p2p_quic_listen(args)?; return Ok(()); }
-            Command::P2pQuicConnect(args) => { run_p2p_quic_connect(args)?; return Ok(()); }
-            Command::P2pInjectHeaders(args) => { run_p2p_inject_headers(args)?; return Ok(()); }
-            Command::P2pInjectPayloads(args) => { run_p2p_inject_payloads(args)?; return Ok(()); }
-            Command::P2pMetrics => { run_p2p_metrics()?; return Ok(()); }
-            Command::P2pMetricsServe(args) => { run_p2p_metrics_serve(args)?; return Ok(()); }
-            Command::ConsensusAckDists(args) => { run_consensus_ack_dists(args)?; return Ok(()); }
-            Command::ConsensusPayoutRoot(args) => { run_consensus_payout_root(args)?; return Ok(()); }
-            Command::CacheBench(args) => { run_cache_bench(args)?; return Ok(()); }
+            Command::PayoutRoot(args) => {
+                run_payout_root(args)?;
+                return Ok(());
+            }
+            Command::CommitteePayoutFromHeaders(args) => {
+                run_committee_payout_from_headers(args)?;
+                return Ok(());
+            }
+            Command::BuildPayload(args) => {
+                run_build_payload(args)?;
+                return Ok(());
+            }
+            Command::GraphAck(args) => {
+                run_graph_ack(args)?;
+                return Ok(());
+            }
+            Command::GraphInsertAndAck(args) => {
+                run_graph_insert_and_ack(args)?;
+                return Ok(());
+            }
+            Command::P2pRun(args) => {
+                run_p2p_run(args)?;
+                return Ok(());
+            }
+            Command::DaRun(args) => {
+                run_da_run(args)?;
+                return Ok(());
+            }
+            Command::P2pQuicListen(args) => {
+                run_p2p_quic_listen(args)?;
+                return Ok(());
+            }
+            Command::P2pQuicConnect(args) => {
+                run_p2p_quic_connect(args)?;
+                return Ok(());
+            }
+            Command::P2pInjectHeaders(args) => {
+                run_p2p_inject_headers(args)?;
+                return Ok(());
+            }
+            Command::P2pInjectPayloads(args) => {
+                run_p2p_inject_payloads(args)?;
+                return Ok(());
+            }
+            Command::P2pMetrics => {
+                run_p2p_metrics()?;
+                return Ok(());
+            }
+            Command::P2pMetricsServe(args) => {
+                run_p2p_metrics_serve(args)?;
+                return Ok(());
+            }
+            Command::ConsensusAckDists(args) => {
+                run_consensus_ack_dists(args)?;
+                return Ok(());
+            }
+            Command::ConsensusPayoutRoot(args) => {
+                run_consensus_payout_root(args)?;
+                return Ok(());
+            }
+            Command::CacheBench(args) => {
+                run_cache_bench(args)?;
+                return Ok(());
+            }
         }
     }
     self_check()?;

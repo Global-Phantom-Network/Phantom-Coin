@@ -1,21 +1,25 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 #![forbid(unsafe_code)]
 
-use std::net::SocketAddr;
+use anyhow::{anyhow, Result};
 use clap::Parser;
-use anyhow::{Result, anyhow};
-use hyper::{Body, Request, Response, Server};
 use hyper::service::{make_service_fn, service_fn};
-use pc_p2p::P2pConfig;
+use hyper::{Body, Request, Response, Server};
 use pc_p2p::async_svc as p2p_async;
-use pc_p2p::async_svc::{metrics_snapshot, outbox_deq_inc, inbound_subscribe};
+use pc_p2p::async_svc::{inbound_subscribe, metrics_snapshot, outbox_deq_inc};
 use pc_p2p::messages::{P2pMessage, RespMsg};
 use pc_p2p::quic_transport::start_server;
+use pc_p2p::P2pConfig;
 use pc_store::FileStore;
+use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Debug, Clone, Parser)]
-#[command(name = "quic_listen_with_metrics", version, about = "Run QUIC listener and Prometheus metrics in one process")]
+#[command(
+    name = "quic_listen_with_metrics",
+    version,
+    about = "Run QUIC listener and Prometheus metrics in one process"
+)]
 struct Args {
     /// QUIC Listen-Adresse, z. B. 127.0.0.1:9001
     #[arg(long, default_value = "127.0.0.1:9001")]
@@ -42,13 +46,20 @@ static NODE_INBOUND_OBS_LAGGED_TOTAL: AtomicU64 = AtomicU64::new(0);
 async fn main() -> Result<()> {
     let args = Args::parse();
     // P2P Service
-    let cfg = P2pConfig { max_peers: 256, rate: None };
+    let cfg = P2pConfig {
+        max_peers: 256,
+        rate: None,
+    };
     let (svc, mut out_rx, handle) = p2p_async::spawn(cfg);
 
     // QUIC Server
-    let addr: SocketAddr = args.addr.parse().map_err(|e| anyhow!("invalid addr '{}': {e}", &args.addr))?;
-    let (_endpoint, cert_der, server_task, tx_broadcast) =
-        start_server(addr, svc.clone()).await.map_err(|e| anyhow!("start_server failed: {e}"))?;
+    let addr: SocketAddr = args
+        .addr
+        .parse()
+        .map_err(|e| anyhow!("invalid addr '{}': {e}", &args.addr))?;
+    let (_endpoint, cert_der, server_task, tx_broadcast) = start_server(addr, svc.clone())
+        .await
+        .map_err(|e| anyhow!("start_server failed: {e}"))?;
     // Schreibe Zertifikat
     let cert_path = "./qlm_server.der";
     std::fs::write(cert_path, &cert_der).map_err(|e| anyhow!("write cert failed: {e}"))?;
@@ -66,38 +77,74 @@ async fn main() -> Result<()> {
     // Persistenz-Task: schreibe eingehende Header/Payloads auf Disk
     let mut rx_persist = inbound_subscribe();
     let store = FileStore::open(&args.store_dir, args.fsync)?;
-    println!("{{\"type\":\"store_opened\",\"dir\":\"{}\",\"fsync\":{}}}", &args.store_dir, args.fsync);
+    println!(
+        "{{\"type\":\"store_opened\",\"dir\":\"{}\",\"fsync\":{}}}",
+        &args.store_dir, args.fsync
+    );
     let persist_task = tokio::spawn(async move {
         loop {
             match rx_persist.recv().await {
-                Ok(P2pMessage::HeaderAnnounce(h)) => {
-                    match store.put_header(&h) { Ok(_) => { NODE_PERSIST_HEADERS_TOTAL.fetch_add(1, Ordering::Relaxed); }, Err(_e) => { NODE_PERSIST_HEADERS_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed); } }
-                }
+                Ok(P2pMessage::HeaderAnnounce(h)) => match store.put_header(&h) {
+                    Ok(_) => {
+                        NODE_PERSIST_HEADERS_TOTAL.fetch_add(1, Ordering::Relaxed);
+                    }
+                    Err(_e) => {
+                        NODE_PERSIST_HEADERS_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed);
+                    }
+                },
                 Ok(P2pMessage::Resp(RespMsg::Headers { headers })) => {
                     for h in headers {
-                        match store.put_header(&h) { Ok(_) => { NODE_PERSIST_HEADERS_TOTAL.fetch_add(1, Ordering::Relaxed); }, Err(_e) => { NODE_PERSIST_HEADERS_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed); } }
+                        match store.put_header(&h) {
+                            Ok(_) => {
+                                NODE_PERSIST_HEADERS_TOTAL.fetch_add(1, Ordering::Relaxed);
+                            }
+                            Err(_e) => {
+                                NODE_PERSIST_HEADERS_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed);
+                            }
+                        }
                     }
                 }
                 Ok(P2pMessage::Resp(RespMsg::Payloads { payloads })) => {
                     for p in payloads {
-                        match store.put_payload(&p) { Ok(_) => { NODE_PERSIST_PAYLOADS_TOTAL.fetch_add(1, Ordering::Relaxed); }, Err(_e) => { NODE_PERSIST_PAYLOADS_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed); } }
+                        match store.put_payload(&p) {
+                            Ok(_) => {
+                                NODE_PERSIST_PAYLOADS_TOTAL.fetch_add(1, Ordering::Relaxed);
+                            }
+                            Err(_e) => {
+                                NODE_PERSIST_PAYLOADS_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed);
+                            }
+                        }
                     }
                 }
                 Ok(_) => {}
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => { NODE_INBOUND_OBS_LAGGED_TOTAL.fetch_add(n as u64, Ordering::Relaxed); continue; }
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => { break; }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    NODE_INBOUND_OBS_LAGGED_TOTAL.fetch_add(n as u64, Ordering::Relaxed);
+                    continue;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    break;
+                }
             }
         }
         Ok::<(), anyhow::Error>(())
     });
 
     // Metrics HTTP
-    let metrics_addr: SocketAddr = args.metrics_addr.parse().map_err(|e| anyhow!("invalid metrics_addr '{}': {e}", &args.metrics_addr))?;
+    let metrics_addr: SocketAddr = args
+        .metrics_addr
+        .parse()
+        .map_err(|e| anyhow!("invalid metrics_addr '{}': {e}", &args.metrics_addr))?;
     let make_svc = make_service_fn(|_conn| async move {
         Ok::<_, anyhow::Error>(service_fn(|req: Request<Body>| async move {
             if req.uri().path() != "/metrics" {
-                let mut resp = Response::builder().status(404).body(Body::from("Not Found")).unwrap();
-                resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("text/plain"));
+                let mut resp = Response::builder()
+                    .status(404)
+                    .body(Body::from("Not Found"))
+                    .unwrap();
+                resp.headers_mut().insert(
+                    hyper::header::CONTENT_TYPE,
+                    hyper::header::HeaderValue::from_static("text/plain"),
+                );
                 return Ok::<_, anyhow::Error>(resp);
             }
             let m = metrics_snapshot();
@@ -157,12 +204,18 @@ pc_p2p_in_handle_seconds_count {}\n",
                 n_hdr, n_hdr_err, n_pl, n_pl_err, n_lag
             );
             let mut resp = Response::new(Body::from(format!("{}{}", body, node_metrics)));
-            resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("text/plain; version=0.0.4"));
+            resp.headers_mut().insert(
+                hyper::header::CONTENT_TYPE,
+                hyper::header::HeaderValue::from_static("text/plain; version=0.0.4"),
+            );
             Ok::<_, anyhow::Error>(resp)
         }))
     });
     let server = Server::bind(&metrics_addr).serve(make_svc);
-    println!("{{\"type\":\"metrics_serve\",\"addr\":\"{}\"}}", metrics_addr);
+    println!(
+        "{{\"type\":\"metrics_serve\",\"addr\":\"{}\"}}",
+        metrics_addr
+    );
 
     let graceful = server.with_graceful_shutdown(async {
         let _ = tokio::signal::ctrl_c().await;
@@ -171,6 +224,8 @@ pc_p2p_in_handle_seconds_count {}\n",
     let _ = tokio::join!(forward_task, graceful);
     let _ = persist_task.await;
     let _ = server_task.await;
-    let res = handle.await.map_err(|e| anyhow!("p2p task join error: {e}"))?;
+    let res = handle
+        .await
+        .map_err(|e| anyhow!("p2p task join error: {e}"))?;
     res.map_err(|e| anyhow!("p2p loop error: {e}"))
 }
