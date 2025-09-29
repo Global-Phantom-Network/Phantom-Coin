@@ -53,6 +53,7 @@ fn init_tracing() {
 mod tests {
     use super::*;
     use std::io::Write as _;
+    use std::io::Read as _;
 
     fn unique_tmp(prefix: &str) -> std::path::PathBuf {
         let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
@@ -99,7 +100,7 @@ mod tests {
         std::fs::create_dir_all(&mempool_dir).unwrap();
 
         // Eine Datei erzeugen und dann entfernen
-        let mut path = mempool_dir.join("dead.bin");
+        let path = mempool_dir.join("dead.bin");
         let mut f = std::fs::File::create(&path).unwrap();
         f.write_all(b"x").unwrap();
         remove_with_dir_sync(&path, false).unwrap();
@@ -110,7 +111,7 @@ mod tests {
     fn deterministic_sort_matches_payload_root() {
         // Drei Txs, unsortiert
         let mk = |n: u8| MicroTx { version:1, inputs: vec![], outputs: vec![TxOut { amount: n as u64, lock: LockCommitment([n;32]) }] };
-        let mut txs = vec![mk(3), mk(1), mk(2)];
+        let txs = vec![mk(3), mk(1), mk(2)];
         let sorted = {
             let mut v = txs.clone();
             v.sort_unstable_by(|a,b| digest_microtx(a).cmp(&digest_microtx(b))); v
