@@ -1,0 +1,220 @@
+{
+  "id": null,
+  "uid": "pc-mempool",
+  "title": "Phantom Node - Mempool",
+  "tags": ["phantom", "mempool"],
+  "timezone": "",
+  "schemaVersion": 37,
+  "version": 1,
+  "refresh": "5s",
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Mempool Size (current)",
+      "datasource": "Prometheus",
+      "gridPos": {"h": 6, "w": 8, "x": 0, "y": 0},
+      "options": {
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+        "orientation": "horizontal",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none"
+      },
+      "targets": [
+        {"refId": "A", "expr": "pc_node_mempool_size"}
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Mempool Size",
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 16, "x": 8, "y": 0},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "single", "sort": "none"}},
+      "targets": [
+        {"refId": "A", "expr": "pc_node_mempool_size", "legendFormat": "size"}
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Accepted rate (1m)",
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 8},
+      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "targets": [
+        {"refId": "A", "expr": "rate(pc_node_mempool_accepted_total[1m])", "legendFormat": "accepted/s"}
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Rejected rate (1m)",
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 8},
+      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "targets": [
+        {"refId": "A", "expr": "rate(pc_node_mempool_rejected_total[1m])", "legendFormat": "rejected/s"}
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Duplicate rate (1m)",
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 8},
+      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "targets": [
+        {"refId": "A", "expr": "rate(pc_node_mempool_duplicate_total[1m])", "legendFormat": "duplicates/s"}
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "TTL evictions rate (5m)",
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 16},
+      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "targets": [
+        {"refId": "A", "expr": "rate(pc_node_mempool_ttl_evict_total[5m])", "legendFormat": "ttl_evict/s"}
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Cap evictions rate (5m)",
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 16},
+      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "targets": [
+        {"refId": "A", "expr": "rate(pc_node_mempool_cap_evict_total[5m])", "legendFormat": "cap_evict/s"}
+      ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Proposer built rate (1m)",
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 16},
+      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "targets": [
+        {"refId": "A", "expr": "rate(pc_node_proposer_built_total[1m])", "legendFormat": "built/s"}
+      ]
+    },
+    {
+      "id": 8,
+      "type": "stat",
+      "title": "Proposer last payload size",
+      "datasource": "Prometheus",
+      "gridPos": {"h": 6, "w": 8, "x": 0, "y": 24},
+      "options": {
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+        "orientation": "horizontal",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none"
+      },
+      "targets": [
+        {"refId": "A", "expr": "pc_node_proposer_last_size"}
+      ]
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Proposer errors rate (5m)",
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 16, "x": 8, "y": 24},
+      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "targets": [
+        {"refId": "A", "expr": "rate(pc_node_proposer_errors_total[5m])", "legendFormat": "errors/s"}
+      ]
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Invalidated rate (5m)",
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 32},
+      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "targets": [
+        {"refId": "A", "expr": "rate(pc_node_mempool_invalidated_total[5m])", "legendFormat": "invalidated/s"}
+      ]
+    },
+    {
+      "id": 12,
+      "type": "stat",
+      "title": "Proposer pending",
+      "datasource": "Prometheus",
+      "gridPos": {"h": 6, "w": 12, "x": 12, "y": 32},
+      "options": {
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+        "orientation": "horizontal",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none"
+      },
+      "targets": [
+        {"refId": "A", "expr": "pc_node_proposer_pending"}
+      ]
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "P2P inbound rate (1m)",
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 40},
+      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "targets": [
+        {"refId": "A", "expr": "rate(pc_p2p_inbound_total[1m])", "legendFormat": "inbound/s"}
+      ]
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "P2P outbound rate (1m)",
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 40},
+      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "targets": [
+        {"refId": "A", "expr": "rate(pc_p2p_outbound_total[1m])", "legendFormat": "outbound/s"}
+      ]
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "P2P out errors rate (5m)",
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 40},
+      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "targets": [
+        {"refId": "A", "expr": "rate(pc_p2p_out_errors_total[5m])", "legendFormat": "out_errors/s"}
+      ]
+    },
+    {
+      "id": 16,
+      "type": "timeseries",
+      "title": "Outbox enq/deq (1m)",
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 48},
+      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "targets": [
+        {"refId": "A", "expr": "rate(pc_p2p_outbox_enq_total[1m])", "legendFormat": "enq/s"},
+        {"refId": "B", "expr": "rate(pc_p2p_outbox_deq_total[1m])", "legendFormat": "deq/s"}
+      ]
+    }
+  ]
+}

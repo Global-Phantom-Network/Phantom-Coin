@@ -1,0 +1,9 @@
+[package]
+name = "pc-consensus"
+version = "0.0.1"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+pc-types = { path = "../pc-types" }
+pc-crypto = { path = "../pc-crypto" }

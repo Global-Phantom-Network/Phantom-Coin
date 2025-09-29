@@ -1,0 +1,267 @@
+groups:
+  - name: phantom-node-cache
+    rules:
+      - alert: PhantomNodeHighHeaderMissRateWarning
+        expr: |
+          rate(pc_node_cache_headers_misses_total[5m])
+            / (rate(pc_node_cache_headers_hits_total[5m]) + rate(pc_node_cache_headers_misses_total[5m])) > 0.3
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Header-Cache Miss-Rate > 30% (>=10m)"
+          description: |
+            Instanz {{ $labels.instance }} mit hoher Header-Miss-Rate.
+            Hit-Rate = hits/(hits+misses) ist niedrig → Cache-Kapazität erhöhen oder Datenlokalität prüfen.
+            Aktueller Wert: {{ $value | printf "%.2f" }}
+          runbook_url: https://github.com/phantom-labs/phantom-coin/blob/main/README.md#node-cache-lru
+
+      - alert: PhantomNodeHighHeaderMissRateCritical
+        expr: |
+          rate(pc_node_cache_headers_misses_total[5m])
+            / (rate(pc_node_cache_headers_hits_total[5m]) + rate(pc_node_cache_headers_misses_total[5m])) > 0.6
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Header-Cache Miss-Rate > 60% (>=15m)"
+          description: |
+            Instanz {{ $labels.instance }} mit sehr hoher Header-Miss-Rate. Starker IO-Druck zu erwarten.
+            Prüfe Kapazität `[node.cache].header_cap`, Hotset-Größe und Workload.
+            Aktueller Wert: {{ $value | printf "%.2f" }}
+          runbook_url: https://github.com/phantom-labs/phantom-coin/blob/main/README.md#node-cache-lru
+
+      - alert: PhantomNodeHighPayloadMissRateWarning
+        expr: |
+          rate(pc_node_cache_payloads_misses_total[5m])
+            / (rate(pc_node_cache_payloads_hits_total[5m]) + rate(pc_node_cache_payloads_misses_total[5m])) > 0.3
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Payload-Cache Miss-Rate > 30% (>=10m)"
+          description: |
+            Instanz {{ $labels.instance }} mit hoher Payload-Miss-Rate.
+            Payloads sind speicherintensiv – Kapazität vorsichtig erhöhen und per Metriken prüfen.
+            Aktueller Wert: {{ $value | printf "%.2f" }}
+          runbook_url: https://github.com/phantom-labs/phantom-coin/blob/main/README.md#node-cache-lru
+
+      - alert: PhantomNodeHighPayloadMissRateCritical
+        expr: |
+          rate(pc_node_cache_payloads_misses_total[5m])
+            / (rate(pc_node_cache_payloads_hits_total[5m]) + rate(pc_node_cache_payloads_misses_total[5m])) > 0.6
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Payload-Cache Miss-Rate > 60% (>=15m)"
+          description: |
+            Instanz {{ $labels.instance }} mit sehr hoher Payload-Miss-Rate. Starker IO-Druck zu erwarten.
+            Prüfe Kapazität `[node.cache].payload_cap`, Hotset-Größe und Workload.
+            Aktueller Wert: {{ $value | printf "%.2f" }}
+          runbook_url: https://github.com/phantom-labs/phantom-coin/blob/main/README.md#node-cache-lru
+
+      - alert: PhantomNodeStoreHeaderReadP95HighWarning
+        expr: |
+          histogram_quantile(0.95, sum by (le, instance) (rate(pc_node_store_header_read_seconds_bucket[5m]))) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Store Header Read p95 > 50ms (>=10m)"
+          description: |
+            Instanz {{ $labels.instance }} hat erhöhte Header-Read-Latenzen. Prüfe Cache-Hit-Rate und Storage.
+            Aktueller p95: {{ $value | printf "%.3f s" }}
+          runbook_url: https://github.com/phantom-labs/phantom-coin/blob/main/README.md#metriken-prometheus
+
+      - alert: PhantomNodeStoreHeaderReadP95HighCritical
+        expr: |
+          histogram_quantile(0.95, sum by (le, instance) (rate(pc_node_store_header_read_seconds_bucket[5m]))) > 0.10
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Store Header Read p95 > 100ms (>=10m)"
+          description: |
+            Instanz {{ $labels.instance }} mit sehr hohen Header-Read-Latenzen. IO-Subsystem/oder Cache prüfen.
+            Aktueller p95: {{ $value | printf "%.3f s" }}
+          runbook_url: https://github.com/phantom-labs/phantom-coin/blob/main/README.md#metriken-prometheus
+
+      - alert: PhantomNodeStorePayloadReadP95HighWarning
+        expr: |
+          histogram_quantile(0.95, sum by (le, instance) (rate(pc_node_store_payload_read_seconds_bucket[5m]))) > 0.10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Store Payload Read p95 > 100ms (>=10m)"
+          description: |
+            Instanz {{ $labels.instance }} hat erhöhte Payload-Read-Latenzen. Prüfe Cache-Size und Datenträger.
+            Aktueller p95: {{ $value | printf "%.3f s" }}
+          runbook_url: https://github.com/phantom-labs/phantom-coin/blob/main/README.md#metriken-prometheus
+
+      - alert: PhantomNodeStorePayloadReadP95HighCritical
+        expr: |
+          histogram_quantile(0.95, sum by (le, instance) (rate(pc_node_store_payload_read_seconds_bucket[5m]))) > 0.20
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Store Payload Read p95 > 200ms (>=10m)"
+          description: |
+            Instanz {{ $labels.instance }} mit sehr hohen Payload-Read-Latenzen. IO-Subsystem/oder Cache prüfen.
+            Aktueller p95: {{ $value | printf "%.3f s" }}
+          runbook_url: https://github.com/phantom-labs/phantom-coin/blob/main/README.md#metriken-prometheus
+
+      - alert: PhantomNodePersistErrors
+        expr: |
+          increase(pc_node_persist_headers_errors_total[5m]) + increase(pc_node_persist_payloads_errors_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Persist-Fehler festgestellt (>=5m)"
+          description: |
+            Instanz {{ $labels.instance }} meldet Persist-Fehler.
+            Bitte Logs prüfen und Dateisystem/FSync-Konfiguration verifizieren.
+          runbook_url: https://github.com/phantom-labs/phantom-coin/blob/main/README.md#persistenz
+
+      - alert: PhantomNodeCacheIneffective
+        expr: |
+          (
+            (rate(pc_node_cache_headers_hits_total[5m]) + rate(pc_node_cache_payloads_hits_total[5m]))
+            /
+            ((rate(pc_node_cache_headers_hits_total[5m]) + rate(pc_node_cache_headers_misses_total[5m]))
+              + (rate(pc_node_cache_payloads_hits_total[5m]) + rate(pc_node_cache_payloads_misses_total[5m])))
+          ) < 0.10
+          and
+          (rate(pc_node_store_header_read_seconds_count[5m]) + rate(pc_node_store_payload_read_seconds_count[5m]) > 5)
+        for: 15m
+        labels:
+          severity: warning
+          summary: "Cache ineffektiv (Hit-Rate < 10% bei signifikanter Last)"
+          description: |
+            Instanz {{ $labels.instance }}: Sehr niedrige Hit-Rate trotz messbarer Read-Last.
+            Prüfe Kapazitäten, Datenlokalität und Workload-Muster (z. B. großer Streubesitz).
+          runbook_url: https://github.com/phantom-labs/phantom-coin/blob/main/docs/PHANTOMCOIN_TODO_PLAN.md#tuning-guidelines-node-cache--store-io
+
+  - name: phantom-node-mempool
+    rules:
+      - alert: PhantomNodeMempoolRejectRateWarning
+        expr: |
+          rate(pc_node_mempool_rejected_total[5m])
+            / (rate(pc_node_mempool_rejected_total[5m]) + rate(pc_node_mempool_accepted_total[5m]) + rate(pc_node_mempool_duplicate_total[5m]) + 1e-9) > 0.30
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Mempool Reject-Rate > 30% (>=10m)"
+          description: |
+            Instanz {{ $labels.instance }} mit hoher stateless/stateful Reject-Rate.
+            Prüfe Eingangsqualität, Regeln/Fees und UTXO-State.
+
+      - alert: PhantomNodeMempoolRejectRateCritical
+        expr: |
+          rate(pc_node_mempool_rejected_total[5m])
+            / (rate(pc_node_mempool_rejected_total[5m]) + rate(pc_node_mempool_accepted_total[5m]) + rate(pc_node_mempool_duplicate_total[5m]) + 1e-9) > 0.60
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Mempool Reject-Rate > 60% (>=15m)"
+          description: |
+            Instanz {{ $labels.instance }} mit sehr hoher Reject-Rate.
+            Mögliche Ursachen: Invalid Traffic, falsche Policies, defekter State.
+
+      - alert: PhantomNodeMempoolDuplicateRateWarning
+        expr: |
+          rate(pc_node_mempool_duplicate_total[5m])
+            / (rate(pc_node_mempool_rejected_total[5m]) + rate(pc_node_mempool_accepted_total[5m]) + rate(pc_node_mempool_duplicate_total[5m]) + 1e-9) > 0.50
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Mempool Duplicate-Rate > 50% (>=10m)"
+          description: |
+            Instanz {{ $labels.instance }} empfängt überwiegend Duplikate.
+            Prüfe Gossip/Peers und Deduplizierungsstrategie.
+
+      - alert: PhantomNodeMempoolSizeHighWarning
+        expr: pc_node_mempool_size > 50000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Mempool-Größe > 50k (>=10m)"
+          description: |
+            Instanz {{ $labels.instance }} Mempool wächst groß an.
+            Prüfe Proposer-Rate,fees und Eviction-Regeln.
+
+      - alert: PhantomNodeMempoolSizeHighCritical
+        expr: pc_node_mempool_size > 64000
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Mempool-Größe > 64k (>=10m)"
+          description: |
+            Instanz {{ $labels.instance }} Mempool nahe Hard-Cap.
+            Gefahr von Latenzen/Evictions. Maßnahmen prüfen.
+
+      - alert: PhantomNodeMempoolStuck
+        expr: |
+          increase(pc_node_mempool_accepted_total[15m]) == 0
+            and rate(pc_p2p_in_inv_total[15m]) > 0
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Mempool nimmt nichts an trotz eingehender Inv (>=15m)"
+          description: |
+            Instanz {{ $labels.instance }} akzeptiert keine Txs, obwohl Inventories reinkommen.
+            Prüfe Stateful-Validierung, Policies und State-Root.
+
+      - alert: PhantomNodeMempoolInvalidationsWarning
+        expr: |
+          rate(pc_node_mempool_invalidated_total[5m])
+            / (rate(pc_node_mempool_accepted_total[5m]) + 1e-9) > 0.30
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Mempool Invalidations > 30% vom Acceptance (>=10m)"
+          description: |
+            Instanz {{ $labels.instance }} mit erhöhter Invalidation-Rate durch Finalisierung.
+            Ursachen: parallele Selektion, Überschneidungen, langsamer Proposer, Policies.
+
+      - alert: PhantomNodeMempoolInvalidationsCritical
+        expr: |
+          rate(pc_node_mempool_invalidated_total[5m])
+            / (rate(pc_node_mempool_accepted_total[5m]) + 1e-9) > 0.60
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Mempool Invalidations > 60% vom Acceptance (>=15m)"
+          description: |
+            Instanz {{ $labels.instance }} mit sehr hoher Invalidation-Rate → Workload/Policy prüfen.
+
+      - alert: PhantomNodeProposerPendingHighWarning
+        expr: pc_node_proposer_pending > 50
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Viele Pending-Payloads (>50, >=10m)"
+          description: |
+            Instanz {{ $labels.instance }}: Proposer/Finalisierung stauen sich. Prüfe Konsens/Fortschritt.
+
+      - alert: PhantomNodeProposerPendingHighCritical
+        expr: pc_node_proposer_pending > 200
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Sehr viele Pending-Payloads (>200, >=15m)"
+          description: |
+            Instanz {{ $labels.instance }} hat massiven Pending-Stau. Sofort Ursachenanalyse.

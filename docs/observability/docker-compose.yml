@@ -1,0 +1,37 @@
+version: "3.8"
+
+services:
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: phantom-prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --web.enable-lifecycle
+    ports:
+      - "9090:9090"
+    volumes:
+      - ../prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../prometheus/phantom-node-alerts.yaml:/etc/prometheus/alerts/phantom-node-alerts.yaml:ro
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:10.4.3
+    container_name: phantom-grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    volumes:
+      - ../grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ../grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ../grafana:/var/lib/grafana/dashboards:ro
+    restart: unless-stopped
+
+# Hinweis:
+#  - Phantom-Node Metrics-Endpoint sollte auf dem Host unter 127.0.0.1:9100 laufen.
+#  - In docs/prometheus/prometheus.yml ist target auf host.docker.internal:9100 gesetzt (Docker Desktop/macOS).
+#    Unter Linux ggf. auf 172.17.0.1:9100 anpassen oder den Node im Compose-Netz betreiben.
