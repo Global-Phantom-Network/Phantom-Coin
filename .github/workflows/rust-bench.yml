@@ -23,6 +23,15 @@ jobs:
       - name: Run Criterion benches (pc-crypto)
         run: cargo bench -p pc-crypto
 
+      - name: Add index.html redirect to report
+        run: |
+          mkdir -p target/criterion
+          cat > target/criterion/index.html <<'HTML'
+          <!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0; url=report/index.html">
+          <title>Criterion Report</title>
+          <p>Weiterleitung zum Criterion Report… Falls die Weiterleitung nicht funktioniert, <a href="report/index.html">hier klicken</a>.</p>
+          HTML
+
       - name: Upload Criterion results
         uses: actions/upload-artifact@v4
         if: always()
@@ -39,3 +48,11 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./target/criterion
           destination_dir: criterion/${{ github.run_number }}
+
+      - name: Publish Criterion 'latest' to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        if: always()
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./target/criterion
+          destination_dir: criterion/latest
