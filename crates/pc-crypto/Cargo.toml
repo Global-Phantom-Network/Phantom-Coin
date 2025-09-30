@@ -6,3 +6,17 @@ license = "AGPL-3.0-only"
 
 [dependencies]
 blake3 = "1"
+secp256k1 = { version = "0.28", features = ["rand-std", "global-context", "serde"] }
+blst = { version = "0.3" }
+
+[dev-dependencies]
+hex = "0.4"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "schnorr_bench"
+harness = false
+
+[[bench]]
+name = "bls_bench"
+harness = false

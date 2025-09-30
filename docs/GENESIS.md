@@ -8,6 +8,9 @@ Diese Anleitung beschreibt das Format der `genesis.toml`, wie das kryptographisc
 [consensus]
 # Committee-Größe k (Seats pro Shard); muss 1..=64 sein
 k = 21
+# Optional: PoW-Difficulty (führende Nullbits) für Mint-PoW
+# Wenn nicht gesetzt, verwendet Tools/CLI den Default (POW_DEFAULT_BITS)
+# pow_bits = 20
 
 # 32-Byte Hex (64 Hex-Zeichen). Rohbytes (kein ASCII-Text!)
 genesis_note = "<64-hex-bytes>"
@@ -17,6 +20,7 @@ commitment   = "<64-hex-bytes>"
 ```
 
 - `consensus.k`: Konsens-k (Seats). Harte Validierung auf 1..=64.
+- `consensus.pow_bits` (optional): Difficulty in führenden Nullbits für Mint‑PoW.
 - `genesis_note`: 32 Byte als Hex, z. B. per CSPRNG erzeugt. Wird in Rohbytes interpretiert (die 32 Bytes, auf die das Hex zeigt), nicht als ASCII.
 - `commitment`: BLAKE3-256 über genau diese 32 Rohbytes aus `genesis_note`.
 
@@ -111,6 +115,19 @@ phantom-node ConsensusPayoutRoot \
   --recipients <hex32>,<hex32>,... \
   --proposer_index 0 \
   --genesis ./genesis.toml
+```
+
+- Mint-PoW (Nonce finden):
+```bash
+phantom-node mine_mint \
+  --pow_seed <hex32> \
+  --genesis ./genesis.toml \
+  --threads 0 \
+  --progress_secs 5
+# Alternativ ohne Genesis:
+phantom-node mine_mint \
+  --pow_seed <hex32> \
+  --bits 22
 ```
 
 Hinweis: Ohne `--genesis` fällt das jeweilige Subcommand auf `--k` (CLI) zurück. Das ist ausschließlich für lokale Entwicklung gedacht. Produktion: immer `--genesis` verwenden.

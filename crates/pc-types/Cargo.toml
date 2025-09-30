@@ -10,3 +10,4 @@ pc-codec = { path = "../pc-codec" }
 
 [dev-dependencies]
 proptest = "1.5"
+hex = "0.4"

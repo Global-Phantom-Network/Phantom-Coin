@@ -212,6 +212,8 @@ JSON output includes `hdr_hits`, `hdr_misses`, `pl_hits`, `pl_misses`, `elapsed_
 
 - Maturity (uhrfrei, globaler Anchor‑Index): `docs/SPEC_MATURITY.md`
 - Slashing (Equivocation 100%; Vote‑invalid 50–100%; Conflicting‑DA 25/50/100): `docs/SPEC_SLASHING.md`
+- Fees & Payout (Floor/Proposer/Perf/Attestor, α/D_max, Merkle‑Root): `docs/SPEC_FEES.md`
+- PoW (Emission, Mint‑Kette, Leading‑Zero‑Bits): `docs/SPEC_POW.md`
 
 ## License
 

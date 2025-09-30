@@ -8,13 +8,28 @@
     clippy::indexing_slicing
 )]
 
-use pc_types::{Amount, AnchorHeader, AnchorId, AnchorIndex, EvidenceKind, PayoutEntry, PayoutSet};
+use pc_types::{
+    Amount, AnchorHeader, AnchorId, AnchorIndex, EvidenceKind, MintEvent, PayoutEntry, PayoutSet,
+};
 pub mod consts;
 
 #[derive(Debug)]
 pub enum ConsensusError {
     IndexOutOfRange,
     InvalidParams,
+}
+
+/// Komfort: Erzeugt Attestor-Payout direkt aus BLS-Public-Keys (IDs via Domain-Hash)
+pub fn compute_attestor_payout_from_bls(
+    fees_total: Amount,
+    params: &FeeSplitParams,
+    bls_pks: &[pc_crypto::BlsPublicKey],
+) -> Result<PayoutSet, ConsensusError> {
+    let ids: Vec<[u8; 32]> = bls_pks
+        .iter()
+        .map(|pk| pc_crypto::attestor_recipient_id_from_bls(pk))
+        .collect();
+    compute_attestor_payout(fees_total, params, &ids)
 }
 
 #[inline]
@@ -515,6 +530,53 @@ pub fn committee_payout_root(
     Ok(set.payout_root())
 }
 
+// ============================
+// Proof-of-Work (Emission)
+// ============================
+
+/// BLAKE3-Hash über (POW_DOMAIN || pow_seed(32) || pow_nonce_le(8))
+#[inline]
+pub fn pow_hash(seed: &[u8; 32], nonce: u64) -> pc_crypto::Hash32 {
+    let mut buf = Vec::with_capacity(consts::POW_DOMAIN.len() + 32 + 8);
+    buf.extend_from_slice(consts::POW_DOMAIN);
+    buf.extend_from_slice(seed);
+    buf.extend_from_slice(&nonce.to_le_bytes());
+    pc_crypto::blake3_32(&buf)
+}
+
+/// Prüft, ob der Hash mindestens `bits` führende Nullbits besitzt (MSB-first pro Byte).
+#[inline]
+pub fn pow_meets(bits: u8, h: &pc_crypto::Hash32) -> bool {
+    if bits == 0 {
+        return true;
+    }
+    if (bits as u16) > 256 {
+        return false;
+    }
+    let full = (bits / 8) as usize;
+    let rem = bits % 8;
+    for i in 0..full {
+        if h.get(i).copied().unwrap_or(0) != 0 {
+            return false;
+        }
+    }
+    if rem == 0 {
+        return true;
+    }
+    if let Some(&b) = h.get(full) {
+        let mask: u8 = 0xFFu8 << (8 - rem);
+        return (b & mask) == 0;
+    }
+    false
+}
+
+/// Convenience: Prüft PoW für ein MintEvent gegen `bits`.
+#[inline]
+pub fn check_mint_pow(m: &MintEvent, bits: u8) -> bool {
+    let h = pow_hash(&m.pow_seed, m.pow_nonce);
+    pow_meets(bits, &h)
+}
+
 /// Einfache in-memory Anker-Graph Struktur für Insert/Lookup und Ack-Distanzen
 pub struct AnchorGraph {
     map: std::collections::HashMap<AnchorId, AnchorHeader>,
@@ -718,6 +780,7 @@ impl ConsensusEngine {
 mod tests {
     use super::*;
     use pc_crypto::blake3_32;
+    use pc_crypto::{bls_keygen_from_ikm, attestor_recipient_id_from_bls};
 
     #[test]
     fn threshold() {
@@ -731,6 +794,69 @@ mod tests {
         let m = set_bit(0, 5).unwrap();
         assert_eq!(popcount_u64(m), 1);
         assert!(set_bit(0, 64).is_err());
+    }
+
+    #[test]
+    fn attestor_payout_from_bls_matches_direct_ids() {
+        let params = FeeSplitParams {
+            p_base_bp: 6500,
+            p_prop_bp: 1000,
+            p_perf_bp: 1500,
+            p_att_bp: 1000,
+            d_max: 1,
+            perf_weights: vec![10_000],
+        };
+        params.validate().unwrap();
+
+        let ikm1 = blake3_32(b"ikm-att-1");
+        let ikm2 = blake3_32(b"ikm-att-2");
+        let k1 = bls_keygen_from_ikm(&ikm1).unwrap();
+        let k2 = bls_keygen_from_ikm(&ikm2).unwrap();
+        let pks = [k1.pk.clone(), k2.pk.clone()];
+        let ids = [attestor_recipient_id_from_bls(&k1.pk), attestor_recipient_id_from_bls(&k2.pk)];
+        let fees = 12_345u64;
+
+        let from_pks = compute_attestor_payout_from_bls(fees, &params, &pks).unwrap();
+        let from_ids = compute_attestor_payout(fees, &params, &ids).unwrap();
+        assert_eq!(from_pks.payout_root(), from_ids.payout_root());
+    }
+
+    #[test]
+    fn attestor_payout_from_bls_empty_ok() {
+        let params = FeeSplitParams {
+            p_base_bp: 6500,
+            p_prop_bp: 1000,
+            p_perf_bp: 1500,
+            p_att_bp: 1000,
+            d_max: 1,
+            perf_weights: vec![10_000],
+        };
+        params.validate().unwrap();
+        let fees = 9_999u64;
+        let set = compute_attestor_payout_from_bls(fees, &params, &[]).unwrap();
+        assert!(set.entries.is_empty());
+        assert_eq!(set.payout_root(), [0u8; 32]);
+    }
+
+    #[test]
+    fn pow_meets_boundaries() {
+        // 0 Bits: immer erfüllt
+        let h = [0xFFu8; 32];
+        assert!(pow_meets(0, &h));
+        // 4 führende Nullbits: 0x0F...
+        let mut h2 = [0xFFu8; 32];
+        h2[0] = 0x0F; // 0000 1111
+        assert!(pow_meets(4, &h2));
+        assert!(!pow_meets(5, &h2));
+        // Volle Bytes = 8 Bits: 0x00..
+        let mut h3 = [0xFFu8; 32];
+        h3[0] = 0x00;
+        assert!(pow_meets(8, &h3));
+        // 9 Bits → erstes Byte 0x00, zweites MSB=0
+        h3[1] = 0x7F; // 0111 1111
+        assert!(pow_meets(9, &h3));
+        h3[1] = 0xFF; // 1111 1111
+        assert!(!pow_meets(9, &h3));
     }
 
     #[test]
@@ -1454,5 +1580,273 @@ mod tests {
         let fees = 10_000u64;
         let res = eng.committee_payout_root_for_ack(fees, &recipients, 0, pc_types::AnchorId(id_c));
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn total_payout_root_matches_manual_merge() {
+        let params = FeeSplitParams::recommended();
+        let recipients = [blake3_32(b"a"), blake3_32(b"b"), blake3_32(b"c")];
+        let att = [blake3_32(b"x"), blake3_32(b"y")];
+        let fees = 123_456u64;
+        let dists = [Some(1u8), None, Some(2u8)];
+        let proposer_index = 1usize;
+
+        let committee = compute_committee_payout(fees, &params, &recipients, proposer_index, &dists).unwrap();
+        let attestors = compute_attestor_payout(fees, &params, &att).unwrap();
+        let mut entries = committee.entries;
+        entries.extend_from_slice(&attestors.entries);
+        let expected_root = pc_types::PayoutSet { entries }.payout_root();
+
+        let got = compute_total_payout_root(fees, &params, &recipients, proposer_index, &dists, &att).unwrap();
+        assert_eq!(expected_root, got);
+    }
+
+    #[test]
+    fn total_payout_root_len_mismatch_fails() {
+        let params = FeeSplitParams::recommended();
+        let recipients = [blake3_32(b"a"), blake3_32(b"b"), blake3_32(b"c")];
+        let att = [blake3_32(b"x")];
+        let fees = 1000u64;
+        // ack_distances len != recipients len
+        let dists = [Some(1u8), None];
+        let res = compute_total_payout_root(fees, &params, &recipients, 0, &dists, &att);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn engine_committee_payout_root_for_ack_invalid_proposer_index_fails() {
+        // baue einfachen Graph A<-B<-C
+        let parents_a = pc_types::ParentList::default();
+        let a = pc_types::AnchorHeader { version:1, shard_id:0, parents: parents_a, payload_hash:[0u8;32], creator_index:0, vote_mask:0, ack_present:false, ack_id: pc_types::AnchorId([0u8;32]) };
+        let id_a = a.id_digest();
+        let mut parents_b = pc_types::ParentList::default();
+        parents_b.push(pc_types::AnchorId(id_a)).unwrap();
+        let b = pc_types::AnchorHeader { version:1, shard_id:0, parents: parents_b, payload_hash:[1u8;32], creator_index:1, vote_mask:0, ack_present:false, ack_id: pc_types::AnchorId([0u8;32]) };
+        let id_b = b.id_digest();
+        let mut parents_c = pc_types::ParentList::default();
+        parents_c.push(pc_types::AnchorId(id_b)).unwrap();
+        let c = pc_types::AnchorHeader { version:1, shard_id:0, parents: parents_c, payload_hash:[2u8;32], creator_index:2, vote_mask:0, ack_present:false, ack_id: pc_types::AnchorId([0u8;32]) };
+        let id_c = c.id_digest();
+
+        let mut eng = ConsensusEngine::new(ConsensusConfig::recommended(3));
+        eng.insert_header(a); eng.insert_header(b); eng.insert_header(c);
+
+        let recipients = [blake3_32(b"a"), blake3_32(b"b"), blake3_32(b"c")];
+        let fees = 10_000u64;
+        // proposer_index=3 ist out-of-range
+        let res = eng.committee_payout_root_for_ack(fees, &recipients, 3, pc_types::AnchorId(id_c));
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn ack_distances_empty_returns_none_vec() {
+        let ack = pc_types::AnchorId([0u8;32]);
+        let headers: Vec<pc_types::AnchorHeader> = Vec::new();
+        let k = 5u8;
+        let d_max = 4u8;
+        let v = compute_ack_distances_for_seats(ack, &headers, k, d_max);
+        assert_eq!(v.len(), k as usize);
+        assert!(v.iter().all(|x| x.is_none()));
+    }
+
+    #[test]
+    fn ack_distances_ack_not_in_headers_yields_none() {
+        // ack_id nicht in headers -> keine Distanzen
+        let ack = pc_types::AnchorId([9u8;32]);
+        let parents = pc_types::ParentList::default();
+        let h = pc_types::AnchorHeader { version:1, shard_id:0, parents, payload_hash:[0u8;32], creator_index:0, vote_mask:0, ack_present:false, ack_id: pc_types::AnchorId([0u8;32]) };
+        let headers = vec![h];
+        let v = compute_ack_distances_for_seats(ack, &headers, 3, 4);
+        assert_eq!(v, vec![None, None, None]);
+    }
+
+    #[test]
+    fn ack_distances_multi_parents_and_dmax() {
+        // Konstruiere ack mit zwei Parents (Seat1, Seat2); je ein Grandparent (Seat0, Seat3)
+        // d_max=1: nur Parents (Distanz=1) werden gezählt, Grandparents nicht.
+        // d_max=2: Parents (1) und Grandparents (2) werden gezählt.
+        let p0 = pc_types::ParentList::default();
+        let h0 = pc_types::AnchorHeader { version:1, shard_id:0, parents: p0.clone(), payload_hash:[0u8;32], creator_index:0, vote_mask:0, ack_present:false, ack_id: pc_types::AnchorId([0u8;32]) };
+        let id0 = h0.id_digest();
+
+        let h1 = pc_types::AnchorHeader { version:1, shard_id:0, parents: p0.clone(), payload_hash:[1u8;32], creator_index:1, vote_mask:0, ack_present:false, ack_id: pc_types::AnchorId([0u8;32]) };
+        let id1 = h1.id_digest();
+
+        let mut p2 = pc_types::ParentList::default();
+        p2.push(pc_types::AnchorId(id0)).unwrap();
+        let h2 = pc_types::AnchorHeader { version:1, shard_id:0, parents: p2.clone(), payload_hash:[2u8;32], creator_index:2, vote_mask:0, ack_present:false, ack_id: pc_types::AnchorId([0u8;32]) };
+        let id2 = h2.id_digest();
+
+        let mut p3 = pc_types::ParentList::default();
+        p3.push(pc_types::AnchorId(id1)).unwrap();
+        let h3 = pc_types::AnchorHeader { version:1, shard_id:0, parents: p3.clone(), payload_hash:[3u8;32], creator_index:3, vote_mask:0, ack_present:false, ack_id: pc_types::AnchorId([0u8;32]) };
+        let id3 = h3.id_digest();
+
+        let mut pa = pc_types::ParentList::default();
+        pa.push(pc_types::AnchorId(id2)).unwrap();
+        pa.push(pc_types::AnchorId(id3)).unwrap();
+        let ack_h = pc_types::AnchorHeader { version:1, shard_id:0, parents: pa, payload_hash:[4u8;32], creator_index:4, vote_mask:0, ack_present:false, ack_id: pc_types::AnchorId([0u8;32]) };
+        let ack_id = pc_types::AnchorId(ack_h.id_digest());
+
+        let headers = vec![h0, h1, h2, h3, ack_h.clone()];
+        let k = 5u8; // seats 0..4
+
+        // d_max=1 → nur Seats der direkten Parents (2,3) mit Distanz 1
+        let v1 = compute_ack_distances_for_seats(ack_id, &headers, k, 1);
+        assert_eq!(v1.len(), k as usize);
+        assert_eq!(v1[2], Some(1));
+        assert_eq!(v1[3], Some(1));
+        assert!(v1[0].is_none() && v1[1].is_none() && v1[4].is_none());
+
+        // d_max=2 → zusätzlich Grandparents (0 via h2, 1 via h3) mit Distanz 2
+        let v2 = compute_ack_distances_for_seats(ack_id, &headers, k, 2);
+        assert_eq!(v2[0], Some(2));
+        assert_eq!(v2[1], Some(2));
+        assert_eq!(v2[2], Some(1));
+        assert_eq!(v2[3], Some(1));
+        assert!(v2[4].is_none());
+    }
+
+    #[test]
+    fn ack_distances_unknown_parent_ignored() {
+        // ack referenziert einen Parent, der nicht in headers existiert → wird ignoriert
+        let parents = pc_types::ParentList::default();
+        let h0 = pc_types::AnchorHeader { version:1, shard_id:0, parents, payload_hash:[0u8;32], creator_index:0, vote_mask:0, ack_present:false, ack_id: pc_types::AnchorId([0u8;32]) };
+        let id0 = h0.id_digest();
+        let fake = pc_types::AnchorId([0xFF;32]);
+        let mut pa = pc_types::ParentList::default();
+        pa.push(pc_types::AnchorId(id0)).unwrap();
+        pa.push(fake).unwrap();
+        let ack_h = pc_types::AnchorHeader { version:1, shard_id:0, parents: pa, payload_hash:[1u8;32], creator_index:4, vote_mask:0, ack_present:false, ack_id: pc_types::AnchorId([0u8;32]) };
+        let ack_id = pc_types::AnchorId(ack_h.id_digest());
+        let headers = vec![h0, ack_h];
+        let v = compute_ack_distances_for_seats(ack_id, &headers, 5, 2);
+        // seat 0 erreicht mit Distanz 1; der unbekannte Parent bewirkt keine weiteren Einträge
+        assert_eq!(v[0], Some(1));
+    }
+
+    #[test]
+    fn committee_payout_zero_fees_yields_empty() {
+        let params = FeeSplitParams { p_base_bp:6500, p_prop_bp:1000, p_perf_bp:1500, p_att_bp:1000, d_max:1, perf_weights: vec![10_000] };
+        params.validate().unwrap();
+        let recipients = [blake3_32(b"a"), blake3_32(b"b"), blake3_32(b"c")];
+        let dists = [Some(1u8), None, Some(2u8)];
+        let set = compute_committee_payout(0, &params, &recipients, 1, &dists).unwrap();
+        assert!(set.entries.is_empty());
+    }
+
+    #[test]
+    fn committee_payout_base_only_k64_remainder_distribution() {
+        // Nur base_pot=10000bp → 100% Basis, k=64, remainder deterministisch nach recipient_id
+        let params = FeeSplitParams { p_base_bp:10_000, p_prop_bp:0, p_perf_bp:0, p_att_bp:0, d_max:1, perf_weights: vec![10_000] };
+        params.validate().unwrap();
+        let mut recipients: Vec<[u8;32]> = Vec::with_capacity(64);
+        for i in 0u8..64u8 { recipients.push([i;32]); }
+        let fees = 1000u64;
+        let set = compute_committee_payout(fees, &params, &recipients, 0, &vec![None;64]).unwrap();
+        let sum: u64 = set.entries.iter().map(|e| e.amount).sum();
+        assert_eq!(sum, fees);
+        // erwartete Gleichverteilung: 1000 / 64 = 15 Rest 40 → 40 Empfänger mit 16, 24 mit 15
+        let mut c15 = 0; let mut c16 = 0;
+        for e in &set.entries { if e.amount == 15 { c15 += 1; } else if e.amount == 16 { c16 += 1; } }
+        assert_eq!(c15, 24);
+        assert_eq!(c16, 40);
+    }
+
+    #[test]
+    fn slashing_payout_offender_only_recipient_fails() {
+        let params = SlashingParams::recommended_equivocation();
+        let offender = [0xAA;32];
+        let recipients = [offender];
+        let ev = EvidenceKind::Equivocation { seat_id: offender, epoch_id: 1, a: pc_types::AnchorHeader::default(), b: Box::new(pc_types::AnchorHeader::default()) };
+        let res = compute_slashing_payout_for_evidence(1000, &params, &recipients, &ev);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn slashing_payout_vote_invalid_min_max() {
+        // min 50% (5000 bp)
+        let params_min = SlashingParams::recommended_vote_invalid(consts::SLASH_VOTE_INVALID_MIN_BP).unwrap();
+        let offender = [0xBB;32];
+        let recipients = [[0x10;32], offender];
+        let ev = EvidenceKind::VoteInvalid { seat_id: offender, anchor: pc_types::AnchorHeader::default(), reason_code: 1 };
+        let pot_min = split_bp(1000, consts::SLASH_VOTE_INVALID_MIN_BP);
+        let set_min = compute_slashing_payout_for_evidence(1000, &params_min, &recipients, &ev).unwrap();
+        let sum_min: u64 = set_min.entries.iter().map(|e| e.amount).sum();
+        assert_eq!(sum_min, pot_min);
+        assert_eq!(set_min.entries.len(), 1); // nur der nicht-Täter
+
+        // max 100% (10000 bp)
+        let params_max = SlashingParams::recommended_vote_invalid(consts::SLASH_VOTE_INVALID_MAX_BP).unwrap();
+        let pot_max = split_bp(1000, consts::SLASH_VOTE_INVALID_MAX_BP);
+        let set_max = compute_slashing_payout_for_evidence(1000, &params_max, &recipients, &ev).unwrap();
+        let sum_max: u64 = set_max.entries.iter().map(|e| e.amount).sum();
+        assert_eq!(sum_max, pot_max);
+    }
+
+    #[test]
+    fn slashing_payout_large_bond_no_overflow() {
+        let params = SlashingParams::recommended_equivocation();
+        let offender = [0xCC;32];
+        let recipients = [[0x01;32], [0x02;32], offender, [0x03;32]];
+        let ev = EvidenceKind::Equivocation { seat_id: offender, epoch_id: 1, a: pc_types::AnchorHeader::default(), b: Box::new(pc_types::AnchorHeader::default()) };
+        let bond: u64 = u64::MAX / 3;
+        let pot = split_bp(bond, consts::SLASH_EQUIVOCATION_BP);
+        let set = compute_slashing_payout_for_evidence(bond, &params, &recipients, &ev).unwrap();
+        let sum: u64 = set.entries.iter().map(|e| e.amount).sum();
+        assert_eq!(sum, pot);
+    }
+
+    #[test]
+    #[ignore]
+    fn dump_total_payout_root_spec_example() {
+        // Beispiel für SPEC_FEES.md
+        let params = FeeSplitParams::recommended();
+        let recipients = [blake3_32(b"a"), blake3_32(b"b"), blake3_32(b"c")];
+        let att = [blake3_32(b"x"), blake3_32(b"y")];
+        let fees = 42_000u64;
+        let dists = [Some(1u8), Some(2u8), None];
+        let root = compute_total_payout_root(fees, &params, &recipients, 1, &dists, &att).unwrap();
+        println!("TOTAL_PAYOUT_ROOT_SPEC={}", hex::encode(root));
+    }
+
+    #[test]
+    #[ignore]
+    fn dump_total_payout_root_spec_example_case2() {
+        // Zweites Beispiel für weiteren Golden-Test
+        let params = FeeSplitParams::recommended();
+        let recipients = [blake3_32(b"r1"), blake3_32(b"r2"), blake3_32(b"r3"), blake3_32(b"r4")];
+        let att = [blake3_32(b"a1"), blake3_32(b"a2"), blake3_32(b"a3")];
+        let fees = 123_456_789u64;
+        let dists = [Some(2u8), None, Some(1u8), Some(8u8)];
+        let root = compute_total_payout_root(fees, &params, &recipients, 2, &dists, &att).unwrap();
+        println!("TOTAL_PAYOUT_ROOT_SPEC2={}", hex::encode(root));
+    }
+
+    #[test]
+    fn total_payout_root_golden() {
+        // Golden-Test basierend auf SPEC_FEES-Beispiel (dump_total_payout_root_spec_example)
+        let params = FeeSplitParams::recommended();
+        let recipients = [blake3_32(b"a"), blake3_32(b"b"), blake3_32(b"c")];
+        let att = [blake3_32(b"x"), blake3_32(b"y")];
+        let fees = 42_000u64;
+        let dists = [Some(1u8), Some(2u8), None];
+        let root = compute_total_payout_root(fees, &params, &recipients, 1, &dists, &att).unwrap();
+        let hex_root = hex::encode(root);
+        assert_eq!(hex_root, "668f75fc7225e3270bc17cdf864e11c4448a2066142621f926a3903cae7deb14");
+    }
+
+    #[test]
+    fn total_payout_root_golden_case2() {
+        // Golden-Test basierend auf dump_total_payout_root_spec_example_case2
+        let params = FeeSplitParams::recommended();
+        let recipients = [blake3_32(b"r1"), blake3_32(b"r2"), blake3_32(b"r3"), blake3_32(b"r4")];
+        let att = [blake3_32(b"a1"), blake3_32(b"a2"), blake3_32(b"a3")];
+        let fees = 123_456_789u64;
+        let dists = [Some(2u8), None, Some(1u8), Some(8u8)];
+        let root = compute_total_payout_root(fees, &params, &recipients, 2, &dists, &att).unwrap();
+        let hex_root = hex::encode(root);
+        // Wert wird nach Dump ermittelt und hier fixiert
+        assert_eq!(hex_root, "873f050b731e01fb6e5acf78978dd6ac838f45ac48de53b29a171a213944545a");
     }
 }

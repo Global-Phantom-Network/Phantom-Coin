@@ -11,6 +11,11 @@
 
 pub type Hash32 = [u8; 32];
 
+pub mod schnorr;
+pub use schnorr::{schnorr_sign, schnorr_verify, SchnorrKeypair};
+pub mod bls;
+pub use bls::*;
+
 /// Compute BLAKE3-256 (32 bytes) digest
 pub fn blake3_32(data: &[u8]) -> Hash32 {
     use blake3::Hasher;
@@ -19,6 +24,21 @@ pub fn blake3_32(data: &[u8]) -> Hash32 {
     let mut out = [0u8; 32];
     out.copy_from_slice(hasher.finalize().as_bytes());
     out
+}
+
+// Attestor-Recipient-ID aus BLS-Public-Key (Domain-separiert)
+const ATTESTOR_PK_DOMAIN: &[u8] = b"pc:attest:pk:v1\x01";
+
+pub fn attestor_recipient_id_from_bls(pk: &BlsPublicKey) -> Hash32 {
+    let pkb = pk.to_bytes();
+    let mut buf = Vec::with_capacity(ATTESTOR_PK_DOMAIN.len() + pkb.len());
+    buf.extend_from_slice(ATTESTOR_PK_DOMAIN);
+    buf.extend_from_slice(&pkb);
+    blake3_32(&buf)
+}
+
+pub fn bls_pk_from_bytes(b: &[u8; 48]) -> Option<BlsPublicKey> {
+    BlsPublicKey::from_bytes(b)
 }
 
 /// Hash für einen Payout-Leaf: H(domain || recipient_id(32) || amount_le(8))
@@ -125,5 +145,25 @@ mod tests {
         assert_eq!(single, a);
         let empty = merkle_root_hashes(&[]);
         assert_eq!(empty, [0u8; 32]);
+    }
+
+    #[test]
+    fn attestor_recipient_id_derivation_unique_and_stable() {
+        // zwei unterschiedliche Schlüssel → unterschiedliche IDs; gleiche PK → gleiche ID
+        let ikm1 = blake3_32(b"ikm-attestor-1");
+        let ikm2 = blake3_32(b"ikm-attestor-2");
+        let kp1 = bls::bls_keygen_from_ikm(&ikm1).expect("keygen1");
+        let kp2 = bls::bls_keygen_from_ikm(&ikm2).expect("keygen2");
+        let id1 = attestor_recipient_id_from_bls(&kp1.pk);
+        let id1b = attestor_recipient_id_from_bls(&kp1.pk);
+        let id2 = attestor_recipient_id_from_bls(&kp2.pk);
+        assert_eq!(id1, id1b);
+        assert_ne!(id1, id2);
+
+        // PoP Verifikation für beide
+        let pop1 = bls::bls_pop_prove(&kp1.sk);
+        let pop2 = bls::bls_pop_prove(&kp2.sk);
+        assert!(bls::bls_pop_verify(&kp1.pk, &pop1));
+        assert!(bls::bls_pop_verify(&kp2.pk, &pop2));
     }
 }

@@ -7,3 +7,6 @@ license = "AGPL-3.0-only"
 [dependencies]
 pc-types = { path = "../pc-types" }
 pc-crypto = { path = "../pc-crypto" }
+
+[dev-dependencies]
+hex = "0.4"

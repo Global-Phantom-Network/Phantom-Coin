@@ -17,9 +17,10 @@ use hyper::{Body, Request, Response, Server};
 use lru::LruCache;
 use pc_codec::{self, Decodable, Encodable};
 use pc_consensus::{
-    compute_ack_distances_for_seats, compute_committee_payout,
-    compute_committee_payout_from_headers, compute_total_payout_root, finality_threshold, is_final,
-    popcount_u64, set_bit, AnchorGraphCache, ConsensusConfig, ConsensusEngine, FeeSplitParams,
+    check_mint_pow, compute_ack_distances_for_seats, compute_committee_payout,
+    compute_committee_payout_from_headers, compute_total_payout_root, consts, finality_threshold,
+    is_final, popcount_u64, pow_hash, pow_meets, set_bit, AnchorGraphCache, ConsensusConfig,
+    ConsensusEngine, FeeSplitParams,
 };
 use pc_crypto::blake3_32;
 use pc_p2p::async_svc::{
@@ -37,6 +38,7 @@ use pc_store::FileStore;
 use pc_types::digest_microtx;
 use pc_types::payload_merkle_root;
 use pc_types::validate_microtx_sanity;
+use pc_types::validate_mint_sanity;
 use pc_types::validate_payload_sanity;
 use pc_types::MAX_PAYLOAD_MICROTX;
 use pc_types::{
@@ -1010,9 +1012,6 @@ struct P2pQuicListenArgs {
     /// Aktiviere einfachen PoW-Miner für Mint-Emission (Dev)
     #[arg(long, default_value_t = false)]
     pow_miner: bool,
-    /// PoW-Target (32-Byte Hex, Threshold: blake3(seed||nonce_be) < target)
-    #[arg(long)]
-    pow_target: Option<String>,
     /// Mint-Amount (in kleinster Einheit)
     #[arg(long)]
     mint_amount: Option<u64>,
@@ -1072,6 +1071,8 @@ struct Genesis {
 #[derive(Debug, Deserialize)]
 struct GenesisConsensus {
     k: u8,
+    // Optional: PoW-Difficulty in führenden Nullbits für Mint-PoW
+    pow_bits: Option<u8>,
 }
 
 fn load_genesis(path: &str) -> Result<Genesis> {
@@ -2148,13 +2149,22 @@ fn run_p2p_quic_listen(args: &P2pQuicListenArgs) -> Result<()> {
             Ok::<(), anyhow::Error>(())
         });
 
+        // pow_bits aus Genesis (falls vorhanden), sonst Default
+        let pow_bits_eff: u8 = if let Some(ref gpath) = args.genesis {
+            let g = load_genesis(gpath)?;
+            let b = g.consensus.pow_bits.unwrap_or(consts::POW_DEFAULT_BITS);
+            if (b as u16) > 256 { return Err(anyhow!("invalid pow_bits in genesis: {} (must be 0..=256)", b)); }
+            println!("{{\"type\":\"pow_bits\",\"bits\":{}}}", b);
+            b
+        } else { consts::POW_DEFAULT_BITS };
+
         // Optional: Dev-PoW-Miner für Mint-Emission (nur im Listen-Server sinnvoll)
         if args.pow_miner {
             let svc_miner = svc.clone();
             let tx_inv = tx_broadcast.clone();
-            let target = if let Some(t) = &args.pow_target { parse_hex32(t)? } else { return Err(anyhow!("--pow_miner requires --pow_target")); };
             let amount = args.mint_amount.ok_or_else(|| anyhow!("--pow_miner requires --mint_amount"))?;
             let lock = if let Some(l) = &args.mint_lock { LockCommitment(parse_hex32(l)?) } else { return Err(anyhow!("--pow_miner requires --mint_lock")); };
+            let bits = pow_bits_eff;
             tokio::spawn(async move {
                 let mut prev_mint_id = [0u8;32];
                 let mut seed_ctr: u64 = 0;
@@ -2166,11 +2176,8 @@ fn run_p2p_quic_listen(args: &P2pQuicListenArgs) -> Result<()> {
                     seed_ctr = seed_ctr.wrapping_add(1);
                     let mut nonce: u64 = 0;
                     loop {
-                        let mut dat = Vec::with_capacity(32 + 8);
-                        dat.extend_from_slice(&seed);
-                        dat.extend_from_slice(&nonce.to_be_bytes());
-                        let h = blake3_32(&dat);
-                        if h < target {
+                        let h = pow_hash(&seed, nonce);
+                        if pow_meets(bits, &h) {
                             let txout = TxOut { amount, lock };
                             let mint = MintEvent { version:1, prev_mint_id, outputs: vec![txout], pow_seed: seed, pow_nonce: nonce };
                             let payload = AnchorPayload { version:1, micro_txs: vec![], mints: vec![mint], claims: vec![], evidences: vec![], payout_root: [0u8;32] };
@@ -2201,6 +2208,8 @@ fn run_p2p_quic_listen(args: &P2pQuicListenArgs) -> Result<()> {
             println!("{{\"type\":\"k_selected\",\"k\":{},\"source\":\"{}\"}}", k, if args.config.is_some() { "config" } else { "cli" });
             k
         };
+
+        
 
         // Konsens-Task: beobachtet Header, pflegt Graph und markiert finale Payload-Roots
         let mut rx_in = inbound_subscribe();
@@ -2349,6 +2358,12 @@ fn run_p2p_quic_listen(args: &P2pQuicListenArgs) -> Result<()> {
                             // aus Order entfernen
                             if let Some(pos) = order.iter().position(|k| *k == root) { let _ = order.remove(pos); }
                             if let Err(e) = validate_payload_sanity(&p) { warn!(root = %hex::encode(root), err = %e, "drop pending payload: invalid"); continue; }
+                            // Mint-PoW-Validierung
+                            let mut mint_ok = true;
+                            for m in &p.mints {
+                                if validate_mint_sanity(m).is_err() || !check_mint_pow(m, pow_bits_eff) { mint_ok = false; break; }
+                            }
+                            if !mint_ok { warn!(root = %hex::encode(root), bits = pow_bits_eff, "drop pending payload: mint pow invalid"); continue; }
                             for m in &p.mints { st.apply_mint(m); }
                             for tx in &p.micro_txs {
                                 if let Err(e) = st.apply_micro_tx(tx) { warn!(%e, "utxo apply_micro_tx failed (pending)"); }
@@ -2503,6 +2518,12 @@ fn run_p2p_quic_listen(args: &P2pQuicListenArgs) -> Result<()> {
                                     let apply = { let g = finals_for_state.lock().await; g.contains(&root) };
                                     if apply {
                                         if let Err(e) = validate_payload_sanity(&p) { warn!(root = %hex::encode(root), err = %e, "drop payload: invalid"); continue; }
+                                        // Mint-PoW-Validierung
+                                        let mut mint_ok = true;
+                                        for m in &p.mints {
+                                            if validate_mint_sanity(m).is_err() || !check_mint_pow(m, pow_bits_eff) { mint_ok = false; break; }
+                                        }
+                                        if !mint_ok { warn!(root = %hex::encode(root), bits = pow_bits_eff, "drop payload: mint pow invalid"); continue; }
                                         for m in &p.mints { st.apply_mint(m); }
                                         for tx in &p.micro_txs {
                                             if let Err(e) = st.apply_micro_tx(tx) { warn!(%e, "utxo apply_micro_tx failed"); }
@@ -2523,6 +2544,15 @@ fn run_p2p_quic_listen(args: &P2pQuicListenArgs) -> Result<()> {
                                             if let Err(e) = validate_payload_sanity(&p) {
                                                 warn!(root = %hex::encode(root), err = %e, "drop payload: invalid (not queued)");
                                             } else {
+                                                // Mint-PoW-Validierung vor dem Queuen
+                                                let mut mint_ok = true;
+                                                for m in &p.mints {
+                                                    if validate_mint_sanity(m).is_err() || !check_mint_pow(m, pow_bits_eff) { mint_ok = false; break; }
+                                                }
+                                                if !mint_ok {
+                                                    warn!(root = %hex::encode(root), bits = pow_bits_eff, "drop payload: mint pow invalid (not queued)");
+                                                    continue;
+                                                }
                                                 pending.insert(root, (p, Instant::now()));
                                                 order.push_back(root);
                                                 warn!(root = %hex::encode(root), "queued payload: header not final yet");

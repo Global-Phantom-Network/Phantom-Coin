@@ -5,3 +5,6 @@ edition = "2021"
 license = "AGPL-3.0-only"
 
 [dependencies]
+
+[dev-dependencies]
+proptest = "1.5"

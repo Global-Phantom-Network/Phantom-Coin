@@ -220,6 +220,7 @@ impl<T: Decodable> Decodable for Vec<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     #[test]
     fn var_roundtrip() {
@@ -239,6 +240,92 @@ mod tests {
             let mut slice = &buf[..];
             let got = read_varu64(&mut slice).unwrap();
             assert_eq!(n, got);
+        }
+    }
+
+    #[test]
+    fn var_truncated_errors() {
+        // Zwei Bytes mit gesetztem Continue-Bit, dann Ende → sollte IO/Truncated-Error geben
+        let data = [0x80u8, 0x80u8];
+        let mut s = &data[..];
+        let err = read_varu64(&mut s).unwrap_err();
+        match err {
+            CodecError::Io(_) => {},
+            _ => panic!("expected Io error for truncated varint"),
+        }
+    }
+
+    #[test]
+    fn var_overlong_no_terminator_errors() {
+        // 10 Bytes mit Continue-Bit (kein Terminator) → sollte InvalidLength(0) liefern
+        let data = [0x80u8; 10];
+        let mut s = &data[..];
+        let err = read_varu64(&mut s).unwrap_err();
+        match err {
+            CodecError::InvalidLength(0) => {},
+            _ => panic!("expected InvalidLength(0) for overlong varint without terminator"),
+        }
+    }
+
+    #[test]
+    fn decode_array32_truncated() {
+        // Nur 31 Bytes statt 32 → Truncated/Io Fehler
+        let data = [0x11u8; 31];
+        let mut s = &data[..];
+        let err = <[u8;32]>::decode(&mut s).unwrap_err();
+        match err {
+            CodecError::Io(_) => {},
+            _ => panic!("expected Io error for truncated [u8;32]"),
+        }
+    }
+
+    #[test]
+    fn decode_vec_len_then_truncated_elements() {
+        // Vec<u8> mit len=2 (02), aber nur 1 Element vorhanden → Truncated/Io Fehler
+        let data = [0x02u8, 0xABu8];
+        let mut s = &data[..];
+        let err = <Vec<u8>>::decode(&mut s).unwrap_err();
+        match err {
+            CodecError::Io(_) => {},
+            _ => panic!("expected Io error for truncated Vec elements"),
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn prop_var_roundtrip(n in any::<u64>()) {
+            let mut buf = Vec::new();
+            write_varu64(&mut buf, n).unwrap();
+            let mut s = &buf[..];
+            let got = read_varu64(&mut s).unwrap();
+            prop_assert_eq!(n, got);
+        }
+
+        #[test]
+        fn prop_vec_u8_roundtrip(v in proptest::collection::vec(any::<u8>(), 0..1024)) {
+            let mut buf = Vec::new();
+            v.encode(&mut buf).unwrap();
+            let mut s = &buf[..];
+            let got = <Vec<u8>>::decode(&mut s).unwrap();
+            prop_assert_eq!(v, got);
+        }
+
+        #[test]
+        fn prop_vec_array32_roundtrip(v in proptest::collection::vec(any::<[u8;32]>(), 0..128)) {
+            let mut buf = Vec::new();
+            v.encode(&mut buf).unwrap();
+            let mut s = &buf[..];
+            let got = <Vec<[u8;32]>>::decode(&mut s).unwrap();
+            prop_assert_eq!(v, got);
+        }
+
+        #[test]
+        fn prop_nested_vec_roundtrip(v in proptest::collection::vec(proptest::collection::vec(any::<[u8;32]>(), 0..32), 0..16)) {
+            let mut buf = Vec::new();
+            v.encode(&mut buf).unwrap();
+            let mut s = &buf[..];
+            let got = <Vec<Vec<[u8;32]>>>::decode(&mut s).unwrap();
+            prop_assert_eq!(v, got);
         }
     }
 }

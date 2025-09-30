@@ -1076,4 +1076,272 @@ mod tests {
         let got = AnchorPayload::decode(&mut &buf[..]).unwrap();
         assert_eq!(p, got);
     }
+
+    #[test]
+    fn payload_merkle_root_order_invariance_full() {
+        // Baue Elemente in bestimmter Reihenfolge
+        let mk_tx = |n: u8| MicroTx {
+            version: 1,
+            inputs: vec![],
+            outputs: vec![TxOut { amount: n as u64, lock: LockCommitment([n; 32]) }],
+        };
+        let mk_mint = |n: u8| MintEvent {
+            version: 1,
+            prev_mint_id: [n; 32],
+            outputs: vec![TxOut { amount: (n as u64) * 10, lock: LockCommitment([n.wrapping_add(1); 32]) }],
+            pow_seed: [n.wrapping_add(2); 32],
+            pow_nonce: (n as u64) * 100,
+        };
+        let mk_claim = |n: u8| ClaimEvent {
+            version: 1,
+            anchor_id: AnchorId([n; 32]),
+            recipient_id: [n.wrapping_add(1); 32],
+            amount: (n as u64) * 3,
+            merkle_proof: vec![[n.wrapping_add(2); 32]],
+            payout_lock: LockCommitment([n.wrapping_add(3); 32]),
+        };
+        let mk_evid = |n: u8| EvidenceEvent {
+            version: 1,
+            evidence: EvidenceKind::VoteInvalid { seat_id: [n; 32], anchor: AnchorHeader::default(), reason_code: n as u16 },
+        };
+
+        let pr = PayoutSet { entries: vec![ PayoutEntry{ recipient_id: [0x21;32], amount: 1000 }, PayoutEntry{ recipient_id: [0x10;32], amount: 500 } ] }.payout_root();
+
+        let p1 = AnchorPayload {
+            version: 1,
+            micro_txs: vec![mk_tx(3), mk_tx(1)],
+            mints: vec![mk_mint(7), mk_mint(5)],
+            claims: vec![mk_claim(9), mk_claim(2)],
+            evidences: vec![mk_evid(4), mk_evid(8)],
+            payout_root: pr,
+        };
+        // Permutiere die Reihenfolge in jeder Kategorie
+        let p2 = AnchorPayload {
+            version: 1,
+            micro_txs: vec![p1.micro_txs[1].clone(), p1.micro_txs[0].clone()],
+            mints: vec![p1.mints[1].clone(), p1.mints[0].clone()],
+            claims: vec![p1.claims[1].clone(), p1.claims[0].clone()],
+            evidences: vec![p1.evidences[1].clone(), p1.evidences[0].clone()],
+            payout_root: p1.payout_root,
+        };
+        assert_eq!(payload_merkle_root(&p1), payload_merkle_root(&p2));
+    }
+
+    #[test]
+    #[ignore]
+    fn dump_stable_hash_vectors() {
+        // Mikro‑Tx
+        let tx = MicroTx { version:1, inputs: vec![], outputs: vec![TxOut{ amount: 12345, lock: LockCommitment([9u8;32]) }] };
+        let tx_h = digest_microtx(&tx);
+        println!("MICROTX_DIGEST={}", hex::encode(tx_h));
+
+        // Mint
+        let mint = MintEvent { version:1, prev_mint_id: [0xAA;32], outputs: vec![TxOut{ amount: 42, lock: LockCommitment([0x55;32]) }], pow_seed: [0x11;32], pow_nonce: 987654321 };
+        let mint_h = digest_mint(&mint);
+        println!("MINT_DIGEST={}", hex::encode(mint_h));
+
+        // Claim
+        let claim = ClaimEvent { version:1, anchor_id: AnchorId([0x01;32]), recipient_id: [0x02;32], amount: 777, merkle_proof: vec![[0x03;32],[0x04;32]], payout_lock: LockCommitment([0x05;32]) };
+        let claim_h = digest_claim(&claim);
+        println!("CLAIM_DIGEST={}", hex::encode(claim_h));
+
+        // Evidence (VoteInvalid)
+        let header = AnchorHeader { version:1, shard_id: 2, parents: ParentList::default(), payload_hash: [0x10;32], creator_index: 3, vote_mask: 0xABCDEF, ack_present: false, ack_id: AnchorId([0u8;32]) };
+        let evid = EvidenceEvent { version:1, evidence: EvidenceKind::VoteInvalid { seat_id: [0x07;32], anchor: header, reason_code: 0x99 } };
+        let evid_h = digest_evidence(&evid);
+        println!("EVIDENCE_DIGEST={}", hex::encode(evid_h));
+
+        // Payload Root (mit deterministischer PayoutRoot)
+        let payout = PayoutSet { entries: vec![ PayoutEntry{ recipient_id: [0x21;32], amount: 1000 }, PayoutEntry{ recipient_id: [0x10;32], amount: 500 } ] };
+        let payload = AnchorPayload { version:1, micro_txs: vec![tx.clone()], mints: vec![mint.clone()], claims: vec![claim.clone()], evidences: vec![evid.clone()], payout_root: payout.payout_root() };
+        let pl_root = payload_merkle_root(&payload);
+        println!("PAYLOAD_ROOT={}", hex::encode(pl_root));
+
+        // Header ID
+        let mut parents = ParentList::default();
+        parents.push(AnchorId([0x22;32])).unwrap();
+        let hdr = AnchorHeader { version:1, shard_id: 9, parents, payload_hash: pl_root, creator_index: 4, vote_mask: 0x55AA, ack_present: true, ack_id: AnchorId([0x77;32]) };
+        let hid = hdr.id_digest();
+        println!("HEADER_ID={}", hex::encode(hid));
+    }
+
+    #[test]
+    fn stable_hash_vectors_golden() {
+        // Repliziere dieselben Objekte wie im Dump-Test und verifiziere die erwarteten Hashes
+        let tx = MicroTx { version:1, inputs: vec![], outputs: vec![TxOut{ amount: 12345, lock: LockCommitment([9u8;32]) }] };
+        let tx_h = digest_microtx(&tx);
+        assert_eq!(hex::encode(tx_h), "1f701e879ce87e53d835dbf6ac42a51e2204135f664152749a51db4172872e73");
+
+        let mint = MintEvent { version:1, prev_mint_id: [0xAA;32], outputs: vec![TxOut{ amount: 42, lock: LockCommitment([0x55;32]) }], pow_seed: [0x11;32], pow_nonce: 987654321 };
+        let mint_h = digest_mint(&mint);
+        assert_eq!(hex::encode(mint_h), "08d15620dc06558b18c7a175ed7613ebabe2b79329fc05ffa6860386137861f2");
+
+        let claim = ClaimEvent { version:1, anchor_id: AnchorId([0x01;32]), recipient_id: [0x02;32], amount: 777, merkle_proof: vec![[0x03;32],[0x04;32]], payout_lock: LockCommitment([0x05;32]) };
+        let claim_h = digest_claim(&claim);
+        assert_eq!(hex::encode(claim_h), "ff1d41d529269c7aeea43b664ec7b674eae08ab97f7cc65976853d5b5aa3aea8");
+
+        let header = AnchorHeader { version:1, shard_id: 2, parents: ParentList::default(), payload_hash: [0x10;32], creator_index: 3, vote_mask: 0xABCDEF, ack_present: false, ack_id: AnchorId([0u8;32]) };
+        let evid = EvidenceEvent { version:1, evidence: EvidenceKind::VoteInvalid { seat_id: [0x07;32], anchor: header, reason_code: 0x99 } };
+        let evid_h = digest_evidence(&evid);
+        assert_eq!(hex::encode(evid_h), "78221b1ec5446d85ce9c7046d77033e4c9d9e6078cf8bd6fdf27c16b676db9e6");
+
+        let payout = PayoutSet { entries: vec![ PayoutEntry{ recipient_id: [0x21;32], amount: 1000 }, PayoutEntry{ recipient_id: [0x10;32], amount: 500 } ] };
+        let payload = AnchorPayload { version:1, micro_txs: vec![tx.clone()], mints: vec![mint.clone()], claims: vec![claim.clone()], evidences: vec![evid.clone()], payout_root: payout.payout_root() };
+        let pl_root = payload_merkle_root(&payload);
+        assert_eq!(hex::encode(pl_root), "2b6cdafd1cba1ecf772c93135af43d5e6d8b0efde30be0a2504a9b85f769d0ba");
+
+        let mut parents = ParentList::default();
+        parents.push(AnchorId([0x22;32])).unwrap();
+        let hdr = AnchorHeader { version:1, shard_id: 9, parents, payload_hash: pl_root, creator_index: 4, vote_mask: 0x55AA, ack_present: true, ack_id: AnchorId([0x77;32]) };
+        let hid = hdr.id_digest();
+        assert_eq!(hex::encode(hid), "43e6762a4560e36c7528e6e85def46d5e1aa068eb44362b21e36691628cf7d91");
+    }
+
+    #[test]
+    fn parent_list_decode_len_overflow_fails() {
+        // Baue Buffer mit len=MAX_PARENTS+1 und prüfe, dass decode fehlschlägt
+        let mut buf = Vec::new();
+        let over_len = (MAX_PARENTS as u8).saturating_add(1);
+        buf.push(over_len); // len
+        // keine ids anhängen, sollte bereits an len scheitern
+        let res = ParentList::decode(&mut &buf[..]);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn evidence_invalid_tag_fails_decode() {
+        // Tag=99 (ungültig), danach keine weiteren Felder
+        let mut buf = Vec::new();
+        buf.push(99u8);
+        let res = EvidenceKind::decode(&mut &buf[..]);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn encoded_len_matches_buffer_sizes() {
+        // MicroTx
+        let tx = MicroTx { version:1, inputs: vec![], outputs: vec![TxOut{ amount: 1, lock: LockCommitment([0x01;32]) }] };
+        let mut buf_tx = Vec::new();
+        tx.encode(&mut buf_tx).unwrap();
+        assert_eq!(tx.encoded_len(), buf_tx.len());
+
+        // AnchorHeader mit ack_present=false
+        let hdr = AnchorHeader { version:1, shard_id: 1, parents: ParentList::default(), payload_hash: [0x99;32], creator_index: 2, vote_mask: 3, ack_present: false, ack_id: AnchorId([0u8;32]) };
+        let mut buf_h = Vec::new();
+        hdr.encode(&mut buf_h).unwrap();
+        assert_eq!(hdr.encoded_len(), buf_h.len());
+
+        // AnchorHeader mit ack_present=true (inkl. ack_id)
+        let mut parents = ParentList::default();
+        parents.push(AnchorId([0x22;32])).unwrap();
+        let hdr2 = AnchorHeader { version:1, shard_id: 7, parents, payload_hash: [0x10;32], creator_index: 4, vote_mask: 0x55AA, ack_present: true, ack_id: AnchorId([0x77;32]) };
+        let mut buf_h2 = Vec::new();
+        hdr2.encode(&mut buf_h2).unwrap();
+        assert_eq!(hdr2.encoded_len(), buf_h2.len());
+    }
+
+    #[test]
+    #[ignore]
+    fn header_encode_example_bytes() {
+        // Beispiel-Header für SPEC_CODEC.md
+        // version=1, shard_id=0x1234, parents: len=2 ([AA..AA], [BB..BB]),
+        // payload_hash=[11..11], creator_index=5, vote_mask=300 (varint AC 02),
+        // ack_present=true, ack_id=[CC..CC]
+        let mut parents = ParentList::default();
+        parents.push(AnchorId([0xAA; 32])).unwrap();
+        parents.push(AnchorId([0xBB; 32])).unwrap();
+        let hdr = AnchorHeader {
+            version: 1,
+            shard_id: 0x1234,
+            parents,
+            payload_hash: [0x11; 32],
+            creator_index: 5,
+            vote_mask: 300,
+            ack_present: true,
+            ack_id: AnchorId([0xCC; 32]),
+        };
+        let mut buf = Vec::new();
+        hdr.encode(&mut buf).unwrap();
+        println!("HEADER_EXAMPLE_BYTES={}", hex::encode(buf));
+    }
+
+    #[test]
+    #[ignore]
+    fn anchor_payload_encode_example_bytes() {
+        // Beispiel-Payload mit je 1 Element pro Kategorie und fixem payout_root
+        let tx = MicroTx {
+            version: 1,
+            inputs: vec![TxIn { prev_out: OutPoint { txid: [0x10;32], vout: 1 }, witness: vec![0xAA, 0xBB] }],
+            outputs: vec![TxOut { amount: 1234, lock: LockCommitment([0x20;32]) }],
+        };
+        let mint = MintEvent {
+            version: 1,
+            prev_mint_id: [0x30;32],
+            outputs: vec![TxOut { amount: 55, lock: LockCommitment([0x40;32]) }],
+            pow_seed: [0x50;32],
+            pow_nonce: 777,
+        };
+        let claim = ClaimEvent {
+            version: 1,
+            anchor_id: AnchorId([0x60;32]),
+            recipient_id: [0x61;32],
+            amount: 222,
+            merkle_proof: vec![[0x62;32], [0x63;32]],
+            payout_lock: LockCommitment([0x64;32]),
+        };
+        let evid = EvidenceEvent {
+            version: 1,
+            evidence: EvidenceKind::VoteInvalid { seat_id: [0x70;32], anchor: AnchorHeader::default(), reason_code: 0x1234 },
+        };
+        let payout = PayoutSet { entries: vec![ PayoutEntry { recipient_id: [0x80;32], amount: 1 } ] };
+        let p = AnchorPayload { version:1, micro_txs: vec![tx], mints: vec![mint], claims: vec![claim], evidences: vec![evid], payout_root: payout.payout_root() };
+        let mut buf = Vec::new();
+        p.encode(&mut buf).unwrap();
+        println!("ANCHOR_PAYLOAD_EXAMPLE_BYTES={}", hex::encode(buf));
+    }
+
+    #[test]
+    #[ignore]
+    fn evidence_kinds_encode_example_bytes() {
+        // Equivocation
+        let ev_eq = EvidenceEvent {
+            version: 1,
+            evidence: EvidenceKind::Equivocation {
+                seat_id: [0xA0; 32],
+                epoch_id: 42,
+                a: AnchorHeader::default(),
+                b: Box::new(AnchorHeader::default()),
+            },
+        };
+        let mut buf = Vec::new();
+        ev_eq.encode(&mut buf).unwrap();
+        println!("EVIDENCE_EQUIVOCATION_BYTES={}", hex::encode(&buf));
+
+        // VoteInvalid
+        let ev_vi = EvidenceEvent {
+            version: 1,
+            evidence: EvidenceKind::VoteInvalid {
+                seat_id: [0xB0; 32],
+                anchor: AnchorHeader::default(),
+                reason_code: 0xCAFE,
+            },
+        };
+        buf.clear();
+        ev_vi.encode(&mut buf).unwrap();
+        println!("EVIDENCE_VOTE_INVALID_BYTES={}", hex::encode(&buf));
+
+        // ConflictingDAAttest
+        let ev_da = EvidenceEvent {
+            version: 1,
+            evidence: EvidenceKind::ConflictingDAAttest {
+                seat_id: [0xC0; 32],
+                anchor_id: AnchorId([0xC1;32]),
+                attest_a: vec![0x01, 0x02, 0x03],
+                attest_b: vec![0xFF, 0xEE],
+            },
+        };
+        buf.clear();
+        ev_da.encode(&mut buf).unwrap();
+        println!("EVIDENCE_CONFLICTING_DA_BYTES={}", hex::encode(&buf));
+    }
 }

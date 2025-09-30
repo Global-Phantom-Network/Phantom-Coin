@@ -29,6 +29,15 @@ pub const D_MAX: u8 = 8; // maximale Ack-Distanz, die gewertet wird
 pub const PERF_ALPHA_NUM: u32 = 6; // α = 6/10 = 0.6 (ganzzahlig)
 pub const PERF_ALPHA_DEN: u32 = 10;
 
+// PoW: Domain-Tag und Default-Schwierigkeit (Bits)
+pub const POW_DOMAIN: &[u8] = b"pc:mint:pow:v1\x01";
+pub const POW_DEFAULT_BITS: u8 = 20; // Default-Schwierigkeit (Leitwert für Tools)
+
+// Monetäre Konstanten (Hardcap, Einheiten)
+pub const COIN: u64 = 100_000_000; // 1 PC = 100_000_000 Einheiten
+pub const HARD_CAP_PC: u64 = 50_000_000; // 50 Mio PC
+pub const HARD_CAP_UNITS: u128 = (HARD_CAP_PC as u128) * (COIN as u128);
+
 // Slashing (Basispunkte)
 pub const SLASH_EQUIVOCATION_BP: u16 = 10_000; // 100%
 pub const SLASH_VOTE_INVALID_MIN_BP: u16 = 5_000; // 50%

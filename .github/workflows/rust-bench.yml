@@ -1,0 +1,41 @@
+name: Rust Benchmarks
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 2 * * *' # nightly um 02:00 UTC
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run Criterion benches (pc-crypto)
+        run: cargo bench -p pc-crypto
+
+      - name: Upload Criterion results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: criterion-results
+          path: target/criterion/
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Publish Criterion to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        if: always()
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./target/criterion
+          destination_dir: criterion/${{ github.run_number }}
