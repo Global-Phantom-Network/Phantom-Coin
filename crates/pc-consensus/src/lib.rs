@@ -8,7 +8,7 @@
     clippy::indexing_slicing
 )]
 
-use pc_types::{Amount, AnchorHeader, AnchorId, AnchorIndex, PayoutEntry, PayoutSet};
+use pc_types::{Amount, AnchorHeader, AnchorId, AnchorIndex, EvidenceKind, PayoutEntry, PayoutSet};
 pub mod consts;
 
 #[derive(Debug)]
@@ -266,6 +266,112 @@ pub fn compute_committee_payout(
         }
     }
 
+    Ok(PayoutSet { entries })
+}
+
+/// Slashing-Parameter für unterschiedliche Evidence-Kategorien.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SlashingParams {
+    pub equivocation_bp: u16,   // erwartet 10_000 (100%)
+    pub vote_invalid_bp: u16,   // 5_000..=10_000
+    pub conflicting_da_bp: u16, // {2_500, 5_000, 10_000}
+}
+
+impl SlashingParams {
+    pub fn validate(&self) -> Result<(), ConsensusError> {
+        // Equivocation strikt 100%
+        if self.equivocation_bp != consts::SLASH_EQUIVOCATION_BP {
+            return Err(ConsensusError::InvalidParams);
+        }
+        // Vote-invalid im Intervall [50%, 100%]
+        if self.vote_invalid_bp < consts::SLASH_VOTE_INVALID_MIN_BP
+            || self.vote_invalid_bp > consts::SLASH_VOTE_INVALID_MAX_BP
+        {
+            return Err(ConsensusError::InvalidParams);
+        }
+        // Conflicting-DA aus diskretem Set
+        match self.conflicting_da_bp {
+            x if x == consts::SLASH_DA_25_BP => {}
+            x if x == consts::SLASH_DA_50_BP => {}
+            x if x == consts::SLASH_DA_100_BP => {}
+            _ => return Err(ConsensusError::InvalidParams),
+        }
+        Ok(())
+    }
+
+    pub fn recommended_equivocation() -> Self {
+        Self {
+            equivocation_bp: consts::SLASH_EQUIVOCATION_BP,
+            vote_invalid_bp: consts::SLASH_VOTE_INVALID_MAX_BP,
+            conflicting_da_bp: consts::SLASH_DA_100_BP,
+        }
+    }
+    pub fn recommended_vote_invalid(bp: u16) -> Result<Self, ConsensusError> {
+        let s = Self {
+            equivocation_bp: consts::SLASH_EQUIVOCATION_BP,
+            vote_invalid_bp: bp,
+            conflicting_da_bp: consts::SLASH_DA_50_BP,
+        };
+        s.validate()?;
+        Ok(s)
+    }
+    pub fn recommended_conflicting_da(bp: u16) -> Result<Self, ConsensusError> {
+        let s = Self {
+            equivocation_bp: consts::SLASH_EQUIVOCATION_BP,
+            vote_invalid_bp: consts::SLASH_VOTE_INVALID_MAX_BP,
+            conflicting_da_bp: bp,
+        };
+        s.validate()?;
+        Ok(s)
+    }
+}
+
+/// Berechnet Slashing-Payout auf Basis eines Evidence-Events.
+/// - slashed_bond: Betrag des Bonds des Täters
+/// - recipients: payout_id der k Seats (eligible Seats)
+/// Verteilung: 100% des Slashing-Topfs auf alle eligible Seats EXKL. Täter, deterministisch gleichmäßig
+pub fn compute_slashing_payout_for_evidence(
+    slashed_bond: Amount,
+    params: &SlashingParams,
+    recipients: &[[u8; 32]],
+    ev: &EvidenceKind,
+) -> Result<PayoutSet, ConsensusError> {
+    params.validate()?;
+    // Täter-ID aus Evidence extrahieren
+    let offender: [u8; 32] = match ev {
+        EvidenceKind::Equivocation { seat_id, .. } => *seat_id,
+        EvidenceKind::VoteInvalid { seat_id, .. } => *seat_id,
+        EvidenceKind::ConflictingDAAttest { seat_id, .. } => *seat_id,
+    };
+    // Basisprozente je Kategorie
+    let bp: u16 = match ev {
+        EvidenceKind::Equivocation { .. } => params.equivocation_bp,
+        EvidenceKind::VoteInvalid { .. } => params.vote_invalid_bp,
+        EvidenceKind::ConflictingDAAttest { .. } => params.conflicting_da_bp,
+    };
+    let pot = split_bp(slashed_bond, bp);
+    if pot == 0 {
+        return Ok(PayoutSet { entries: vec![] });
+    }
+    // Eligible: alle außer Täter
+    let elig: Vec<[u8; 32]> = recipients
+        .iter()
+        .copied()
+        .filter(|id| *id != offender)
+        .collect();
+    if elig.is_empty() {
+        return Err(ConsensusError::InvalidParams);
+    }
+    let shares = distribute_equal(pot, &elig);
+    let mut entries = Vec::new();
+    for (amt, rcpt) in shares.iter().zip(elig.iter()) {
+        if *amt > 0 {
+            entries.push(PayoutEntry {
+                recipient_id: *rcpt,
+                amount: *amt,
+            });
+        }
+    }
     Ok(PayoutSet { entries })
 }
 
@@ -1145,6 +1251,80 @@ mod tests {
             perf_weights: vec![10000, 6000], // Länge 2
         };
         assert!(bad_len.validate().is_err());
+    }
+
+    #[test]
+    fn slashing_equivocation_100pct() {
+        let recipients = [blake3_32(b"a"), blake3_32(b"b"), blake3_32(b"c")];
+        let offender = recipients[1];
+        let ev = pc_types::EvidenceKind::Equivocation {
+            seat_id: offender,
+            epoch_id: 1,
+            a: AnchorHeader::default(),
+            b: Box::new(AnchorHeader::default()),
+        };
+        let params = SlashingParams::recommended_equivocation();
+        let bond = 1_000u64;
+        let set = compute_slashing_payout_for_evidence(bond, &params, &recipients, &ev)
+            .expect("slash eq");
+        let sum: u64 = set.entries.iter().map(|e| e.amount).sum();
+        assert_eq!(sum, bond); // 100%
+                               // Täter nicht begünstigt
+        for e in &set.entries {
+            assert_ne!(e.recipient_id, offender);
+        }
+        // Gleichverteilung auf 2 recipients
+        let amounts: Vec<u64> = set.normalized_entries().iter().map(|e| e.amount).collect();
+        assert_eq!(amounts.len(), 2);
+        assert!(amounts[0] + amounts[1] == bond);
+    }
+
+    #[test]
+    fn slashing_vote_invalid_50pct() {
+        let recipients = [blake3_32(b"a"), blake3_32(b"b"), blake3_32(b"c")];
+        let offender = recipients[0];
+        let ev = pc_types::EvidenceKind::VoteInvalid {
+            seat_id: offender,
+            anchor: AnchorHeader::default(),
+            reason_code: 42,
+        };
+        let params = SlashingParams::recommended_vote_invalid(consts::SLASH_VOTE_INVALID_MIN_BP)
+            .expect("vi params");
+        let bond = 2_000u64;
+        let set = compute_slashing_payout_for_evidence(bond, &params, &recipients, &ev)
+            .expect("slash vi");
+        let sum: u64 = set.entries.iter().map(|e| e.amount).sum();
+        assert_eq!(sum, bond / 2); // 50%
+        for e in &set.entries {
+            assert_ne!(e.recipient_id, offender);
+        }
+    }
+
+    #[test]
+    fn slashing_conflicting_da_25pct() {
+        let recipients = [
+            blake3_32(b"a"),
+            blake3_32(b"b"),
+            blake3_32(b"c"),
+            blake3_32(b"d"),
+        ];
+        let offender = recipients[2];
+        let ev = pc_types::EvidenceKind::ConflictingDAAttest {
+            seat_id: offender,
+            anchor_id: AnchorId([0u8; 32]),
+            attest_a: vec![1, 2],
+            attest_b: vec![3, 4],
+        };
+        let params =
+            SlashingParams::recommended_conflicting_da(consts::SLASH_DA_25_BP).expect("da params");
+        let bond = 1_000u64;
+        let set = compute_slashing_payout_for_evidence(bond, &params, &recipients, &ev)
+            .expect("slash da");
+        let sum: u64 = set.entries.iter().map(|e| e.amount).sum();
+        assert_eq!(sum, 250);
+        for e in &set.entries {
+            assert_ne!(e.recipient_id, offender);
+        }
     }
 
     #[test]

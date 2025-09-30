@@ -211,6 +211,7 @@ JSON output includes `hdr_hits`, `hdr_misses`, `pl_hits`, `pl_misses`, `elapsed_
 ### Further specs
 
 - Maturity (uhrfrei, globaler Anchor‑Index): `docs/SPEC_MATURITY.md`
+- Slashing (Equivocation 100%; Vote‑invalid 50–100%; Conflicting‑DA 25/50/100): `docs/SPEC_SLASHING.md`
 
 ## License
 

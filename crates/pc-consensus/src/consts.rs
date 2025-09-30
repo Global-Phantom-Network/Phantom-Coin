@@ -29,6 +29,14 @@ pub const D_MAX: u8 = 8; // maximale Ack-Distanz, die gewertet wird
 pub const PERF_ALPHA_NUM: u32 = 6; // α = 6/10 = 0.6 (ganzzahlig)
 pub const PERF_ALPHA_DEN: u32 = 10;
 
+// Slashing (Basispunkte)
+pub const SLASH_EQUIVOCATION_BP: u16 = 10_000; // 100%
+pub const SLASH_VOTE_INVALID_MIN_BP: u16 = 5_000; // 50%
+pub const SLASH_VOTE_INVALID_MAX_BP: u16 = 10_000; // 100%
+pub const SLASH_DA_25_BP: u16 = 2_500; // 25%
+pub const SLASH_DA_50_BP: u16 = 5_000; // 50%
+pub const SLASH_DA_100_BP: u16 = 10_000; // 100%
+
 // Hilfsfunktion: generiert eine monoton fallende Gewichtsliste Länge D_MAX
 pub fn perf_weights_recommended() -> Vec<u32> {
     let mut w = Vec::with_capacity(D_MAX as usize);
