@@ -425,6 +425,16 @@ cargo run -p phantom-node consensus-payout-root \
 #### Metrik-Details
 - **pc_network_id{network="<name>"} 1**: Kennzeichnet, dass eine `genesis_note` erfolgreich gelesen werden konnte; Label `network` zeigt den `network_name`.
 
+- **HTTP-Latenzen** (`phantom_node_http_request_seconds`): Node-weites Histogramm über alle HTTP‑Requests (Status‑Server). Buckets in Sekunden: 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, +Inf.
+  - Beispiel‑Zeilen im Prometheus‑Output (`/metrics`):
+    - `phantom_node_http_request_seconds_bucket{le="0.001"} <n>`
+    - `phantom_node_http_request_seconds_bucket{le="0.005"} <n>`
+    - `...`
+    - `phantom_node_http_request_seconds_bucket{le="+Inf"} <n>`
+    - `phantom_node_http_request_seconds_sum <seconds>`
+    - `phantom_node_http_request_seconds_count <total>`
+  - Hinweis: Aggregiert ohne Endpoint‑Label (geringe Kardinalität). Totals/Fehler pro Konsensus‑Endpoint werden separat als Counter exponiert (siehe Abschnitt „Rate Limiting“ bzw. `/metrics`).
+
 ### Hinweise zu Keys und Signer
 - Schlüssel werden in `phantom-signer` getrennt geführt: `seat | bond | payout`.
 - Siehe `crates/phantom-signer/README.md` für Keygen/Import/HWI/PSBT/Broadcast.
