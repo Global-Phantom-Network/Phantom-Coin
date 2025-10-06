@@ -52,6 +52,78 @@ Status-/Broadcast-HTTP-Server und Node-Runtime-Hilfen.
   - Wie `/consensus/select_committee`, aber persistiert das Ergebnis als `vrf_committee.json` im `mempool_dir`.
   - Body entspricht der Select‑Anfrage inkl. `network_id` und `last_anchor_id`.
 
+- POST `/consensus/select_attestors` (Content-Type: `application/json`)
+  - Zweck: VRF‑basierte Stichprobe von Attestoren (Determinismus, Anti‑Kollokation, Attendance/Cooldown)
+  - Request:
+    ```json
+    {
+      "m": 128,
+      "current_anchor_index": 12345,
+      "epoch_len": 10000,
+      "network_id": "<hex32>",
+      "last_anchor_id": "<hex32>",
+      "rotation": { "cooldown_anchors": 10000, "min_attendance_pct": 50 },
+      "candidates": [
+        {
+          "recipient_id": "<hex32>",
+          "operator_id": "<hex32>",
+          "bls_pk": "<hex48>",
+          "last_selected_at": 10000,
+          "attendance_recent_pct": 100,
+          "vrf_proof": "<hex96>"
+        }
+      ]
+    }
+    ```
+  - Response: `{ "ok": true, "epoch": <u64>, "seed": "<hex32>", "n_selected": <usize>, "seats": [{"recipient_id":"<hex32>","operator_id":"<hex32>","bls_pk":"<hex48>","score":"<hex32>"}] }`
+
+- POST `/consensus/select_attestors_fair` (Content-Type: `application/json`)
+  - Zweck: Faire Stichprobe mit Caps/Performance‑Index.
+  - Zusätzlich zu obigem Body:
+    ```json
+    {
+      "cap_limit_per_op": 2,
+      "recent_op_selection_count": [{ "operator_id": "<hex32>", "count": 1 }],
+      "perf_index": [{ "operator_id": "<hex32>", "score": 100 }]
+    }
+    ```
+  - Response: identisch zu `/consensus/select_attestors`.
+
+- POST `/consensus/attestor_payout_root` (Content-Type: `application/json`)
+  - Zweck: Ermittelt die Merkle‑Root des Attestor‑Topfes für eine gegebene Seats‑Liste.
+  - Request:
+    ```json
+    {
+      "fees_total": 1000000,
+      "fee_params": {"p_base_bp":6500,"p_prop_bp":1000,"p_perf_bp":1500,"p_att_bp":1000,"d_max":8,"perf_weights":[10000,6000,3600,2160,1296,777,466,280]},
+      "seats": [{"recipient_id":"<hex32>"}]
+    }
+    ```
+    `fee_params` optional; Default: `FeeSplitParams::recommended()`.
+  - Response: `{ "ok": true, "payout_root": "<hex32>", "n_seats": <usize> }`
+
+- POST `/consensus/attestor_payout_proof` (Content-Type: `application/json`)
+  - Zweck: Liefert einen Merkle‑Proof für einen konkreten Empfänger innerhalb der Attestor‑Payout‑Verteilung.
+  - Request:
+    ```json
+    {
+      "fees_total": 1000000,
+      "fee_params": null,
+      "seats": [{"recipient_id":"<hex32>"}, {"recipient_id":"<hex32>"}],
+      "recipient_id": "<hex32>"
+    }
+    ```
+  - Response:
+    ```json
+    {
+      "ok": true,
+      "index": 0,
+      "leaf": "<hex32>",
+      "payout_root": "<hex32>",
+      "proof": [{"hash":"<hex32>", "right": true}]
+    }
+    ```
+
 - POST `/consensus/set_rotation_context` (Content-Type: `application/json`)
   - Setzt den Kontext für Auto‑Rotation:
     ```json

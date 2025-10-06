@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use hyper::{Body, Client, Method, Request, StatusCode, Uri};
 use assert_cmd::cargo::cargo_bin;
 use tokio::time::sleep;
+use pc_crypto::{merkle_verify_with_proof, MerkleStep};
 
 fn unique_tmp(prefix: &str) -> std::path::PathBuf {
     let nanos = std::time::SystemTime::now()
@@ -157,7 +158,44 @@ async fn attestor_endpoints_e2e() {
     let resp2 = client.request(req2).await.expect("select_attestors_fair resp");
     assert_eq!(resp2.status(), StatusCode::OK);
 
-    // 6) Aufräumen
+    // 6) POST /consensus/attestor_payout_proof und Proof verifizieren
+    //    Verwenden wir genau einen Seat (unseren Kandidaten), so muss der Proof gültig sein.
+    let recipient_hex = hex32(&blake3_32(b"rcpt-att-e2e"));
+    let seats = serde_json::json!([{ "recipient_id": recipient_hex }]);
+    let req_body_proof = serde_json::json!({
+        "fees_total": 123456u64,
+        "fee_params": serde_json::Value::Null,
+        "seats": seats,
+        "recipient_id": hex32(&blake3_32(b"rcpt-att-e2e")),
+    });
+    let uri3: Uri = format!("http://{}/consensus/attestor_payout_proof", addr).parse().unwrap();
+    let req3 = Request::builder()
+        .method(Method::POST)
+        .uri(uri3)
+        .header("content-type", "application/json")
+        .body(Body::from(req_body_proof.to_string()))
+        .unwrap();
+    let resp3 = client.request(req3).await.expect("attestor_payout_proof resp");
+    assert_eq!(resp3.status(), StatusCode::OK);
+    let body_bytes = hyper::body::to_bytes(resp3.into_body()).await.expect("read proof body");
+    let v: serde_json::Value = serde_json::from_slice(&body_bytes).expect("json proof");
+    assert!(v.get("ok").and_then(|x| x.as_bool()).unwrap_or(false));
+    let leaf_hex = v.get("leaf").and_then(|x| x.as_str()).expect("leaf hex");
+    let root_hex = v.get("payout_root").and_then(|x| x.as_str()).expect("root hex");
+    let proof_arr = v.get("proof").and_then(|x| x.as_array()).expect("proof array");
+
+    fn hex32_to_arr(s: &str) -> [u8;32] { let mut out=[0u8;32]; let raw=hex::decode(s).expect("hex32"); assert_eq!(raw.len(),32); out.copy_from_slice(&raw); out }
+    let leaf = hex32_to_arr(leaf_hex);
+    let root = hex32_to_arr(root_hex);
+    let mut steps: Vec<MerkleStep> = Vec::with_capacity(proof_arr.len());
+    for it in proof_arr {
+        let h = it.get("hash").and_then(|x| x.as_str()).expect("step.hash");
+        let r = it.get("right").and_then(|x| x.as_bool()).expect("step.right");
+        steps.push(MerkleStep{ hash: hex32_to_arr(h), right: r });
+    }
+    assert!(merkle_verify_with_proof(&leaf, &steps, &root));
+
+    // 7) Aufräumen
     let _ = child.kill();
     let _ = child.wait();
 }
