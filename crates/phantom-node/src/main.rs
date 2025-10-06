@@ -354,6 +354,35 @@ fn run_status_serve(args: &StatusServeArgs) -> Result<()> {
                     let _ = writeln!(&mut out, "# TYPE phantom_node_rpc_broadcast_errors_total counter");
                     let _ = writeln!(&mut out, "phantom_node_rpc_broadcast_errors_total {}", NODE_RPC_BROADCAST_ERRORS_TOTAL.load(Ordering::Relaxed));
 
+                    // Consensus Endpoints
+                    let _ = writeln!(&mut out, "# HELP phantom_node_consensus_select_attestors_total Consensus select_attestors requests total");
+                    let _ = writeln!(&mut out, "# TYPE phantom_node_consensus_select_attestors_total counter");
+                    let _ = writeln!(&mut out, "phantom_node_consensus_select_attestors_total {}", NODE_CONSENSUS_SELECT_ATTESTORS_TOTAL.load(Ordering::Relaxed));
+                    let _ = writeln!(&mut out, "# HELP phantom_node_consensus_select_attestors_fair_total Consensus select_attestors_fair requests total");
+                    let _ = writeln!(&mut out, "# TYPE phantom_node_consensus_select_attestors_fair_total counter");
+                    let _ = writeln!(&mut out, "phantom_node_consensus_select_attestors_fair_total {}", NODE_CONSENSUS_SELECT_ATTESTORS_FAIR_TOTAL.load(Ordering::Relaxed));
+                    let _ = writeln!(&mut out, "# HELP phantom_node_consensus_agg_sigs_total Consensus attestor_aggregate_sigs requests total");
+                    let _ = writeln!(&mut out, "# TYPE phantom_node_consensus_agg_sigs_total counter");
+                    let _ = writeln!(&mut out, "phantom_node_consensus_agg_sigs_total {}", NODE_CONSENSUS_AGG_SIGS_TOTAL.load(Ordering::Relaxed));
+                    let _ = writeln!(&mut out, "# HELP phantom_node_consensus_fast_verify_total Consensus fast_verify requests total");
+                    let _ = writeln!(&mut out, "# TYPE phantom_node_consensus_fast_verify_total counter");
+                    let _ = writeln!(&mut out, "phantom_node_consensus_fast_verify_total {}", NODE_CONSENSUS_FAST_VERIFY_TOTAL.load(Ordering::Relaxed));
+                    let _ = writeln!(&mut out, "# HELP phantom_node_consensus_fast_verify_valid_total Consensus fast_verify valid results total");
+                    let _ = writeln!(&mut out, "# TYPE phantom_node_consensus_fast_verify_valid_total counter");
+                    let _ = writeln!(&mut out, "phantom_node_consensus_fast_verify_valid_total {}", NODE_CONSENSUS_FAST_VERIFY_VALID_TOTAL.load(Ordering::Relaxed));
+                    let _ = writeln!(&mut out, "# HELP phantom_node_consensus_fast_verify_seats_total Consensus fast_verify_seats requests total");
+                    let _ = writeln!(&mut out, "# TYPE phantom_node_consensus_fast_verify_seats_total counter");
+                    let _ = writeln!(&mut out, "phantom_node_consensus_fast_verify_seats_total {}", NODE_CONSENSUS_FAST_VERIFY_SEATS_TOTAL.load(Ordering::Relaxed));
+                    let _ = writeln!(&mut out, "# HELP phantom_node_consensus_fast_verify_seats_valid_total Consensus fast_verify_seats valid results total");
+                    let _ = writeln!(&mut out, "# TYPE phantom_node_consensus_fast_verify_seats_valid_total counter");
+                    let _ = writeln!(&mut out, "phantom_node_consensus_fast_verify_seats_valid_total {}", NODE_CONSENSUS_FAST_VERIFY_SEATS_VALID_TOTAL.load(Ordering::Relaxed));
+                    let _ = writeln!(&mut out, "# HELP phantom_node_consensus_payout_root_total Consensus payout_root requests total");
+                    let _ = writeln!(&mut out, "# TYPE phantom_node_consensus_payout_root_total counter");
+                    let _ = writeln!(&mut out, "phantom_node_consensus_payout_root_total {}", NODE_CONSENSUS_PAYOUT_ROOT_TOTAL.load(Ordering::Relaxed));
+                    let _ = writeln!(&mut out, "# HELP phantom_node_consensus_payout_proof_total Consensus payout_proof requests total");
+                    let _ = writeln!(&mut out, "# TYPE phantom_node_consensus_payout_proof_total counter");
+                    let _ = writeln!(&mut out, "phantom_node_consensus_payout_proof_total {}", NODE_CONSENSUS_PAYOUT_PROOF_TOTAL.load(Ordering::Relaxed));
+
                     // Genesis-/Netzwerk-Metriken
                     // pc_network_id{network="<name>"} 1, pc_genesis_height 0 (falls Genesis vorhanden)
                     let p = std::path::Path::new(&mempool_dir).join("genesis_note.bin");
@@ -898,6 +927,7 @@ if whole.len() > MAX_HTTP_BODY_BYTES {
                     resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json"));
                     return Ok::<_, anyhow::Error>(resp);
                 } else if req.uri().path() == "/consensus/select_attestors" && req.method() == hyper::Method::POST {
+                    NODE_CONSENSUS_SELECT_ATTESTORS_TOTAL.fetch_add(1, Ordering::Relaxed);
                     if require_auth {
                         let expected = auth_token.as_deref().unwrap_or("");
                         let got = req.headers().get(hyper::header::AUTHORIZATION);
@@ -987,6 +1017,7 @@ if whole.len() > MAX_HTTP_BODY_BYTES {
                     resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json"));
                     return Ok::<_, anyhow::Error>(resp);
                 } else if req.uri().path() == "/consensus/select_attestors_fair" && req.method() == hyper::Method::POST {
+                    NODE_CONSENSUS_SELECT_ATTESTORS_FAIR_TOTAL.fetch_add(1, Ordering::Relaxed);
                     if require_auth {
                         let expected = auth_token.as_deref().unwrap_or("");
                         let got = req.headers().get(hyper::header::AUTHORIZATION);
@@ -1103,6 +1134,7 @@ if whole.len() > MAX_HTTP_BODY_BYTES {
                     resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json"));
                     return Ok::<_, anyhow::Error>(resp);
                 } else if req.uri().path() == "/consensus/attestor_payout_root" && req.method() == hyper::Method::POST {
+                    NODE_CONSENSUS_PAYOUT_ROOT_TOTAL.fetch_add(1, Ordering::Relaxed);
                     if require_auth {
                         let expected = auth_token.as_deref().unwrap_or("");
                         let got = req.headers().get(hyper::header::AUTHORIZATION);
@@ -1144,6 +1176,7 @@ if whole.len() > MAX_HTTP_BODY_BYTES {
                     resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json"));
                     return Ok::<_, anyhow::Error>(resp);
                 } else if req.uri().path() == "/consensus/attestor_payout_proof" && req.method() == hyper::Method::POST {
+                    NODE_CONSENSUS_PAYOUT_PROOF_TOTAL.fetch_add(1, Ordering::Relaxed);
                     if require_auth {
                         let expected = auth_token.as_deref().unwrap_or("");
                         let got = req.headers().get(hyper::header::AUTHORIZATION);
@@ -1204,6 +1237,7 @@ if whole.len() > MAX_HTTP_BODY_BYTES {
                     resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json"));
                     return Ok::<_, anyhow::Error>(resp);
                 } else if req.uri().path() == "/consensus/attestor_aggregate_sigs" && req.method() == hyper::Method::POST {
+                    NODE_CONSENSUS_AGG_SIGS_TOTAL.fetch_add(1, Ordering::Relaxed);
                     if require_auth {
                         let expected = auth_token.as_deref().unwrap_or("");
                         let got = req.headers().get(hyper::header::AUTHORIZATION);
@@ -1247,6 +1281,7 @@ if whole.len() > MAX_HTTP_BODY_BYTES {
                         }
                     }
                 } else if req.uri().path() == "/consensus/attestor_fast_verify" && req.method() == hyper::Method::POST {
+                    NODE_CONSENSUS_FAST_VERIFY_TOTAL.fetch_add(1, Ordering::Relaxed);
                     if require_auth {
                         let expected = auth_token.as_deref().unwrap_or("");
                         let got = req.headers().get(hyper::header::AUTHORIZATION);
@@ -1284,11 +1319,13 @@ if whole.len() > MAX_HTTP_BODY_BYTES {
                     }
                     let agg = match hex96(&reqv.agg_sig) { Some(v)=>v, None=> { let mut resp=Response::builder().status(400).body(Body::from("{\"ok\":false,\"error\":\"bad agg_sig\"}".to_string())).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); return Ok::<_, anyhow::Error>(resp);} };
                     let ok = bls_fast_aggregate_verify(&msg, &agg, &pks);
+                    if ok { NODE_CONSENSUS_FAST_VERIFY_VALID_TOTAL.fetch_add(1, Ordering::Relaxed); }
                     let body = serde_json::json!({"ok": true, "valid": ok}).to_string();
                     let mut resp = Response::builder().status(200).body(Body::from(body)).unwrap();
                     resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json"));
                     return Ok::<_, anyhow::Error>(resp);
                 } else if req.uri().path() == "/consensus/attestor_fast_verify_seats" && req.method() == hyper::Method::POST {
+                    NODE_CONSENSUS_FAST_VERIFY_SEATS_TOTAL.fetch_add(1, Ordering::Relaxed);
                     if require_auth {
                         let expected = auth_token.as_deref().unwrap_or("");
                         let got = req.headers().get(hyper::header::AUTHORIZATION);
@@ -1666,6 +1703,36 @@ if whole.len() > MAX_HTTP_BODY_BYTES {
                                         let _ = writeln!(&mut out, "# HELP phantom_node_rpc_broadcast_errors_total RPC broadcast errors total");
                                         let _ = writeln!(&mut out, "# TYPE phantom_node_rpc_broadcast_errors_total counter");
                                         let _ = writeln!(&mut out, "phantom_node_rpc_broadcast_errors_total {}", NODE_RPC_BROADCAST_ERRORS_TOTAL.load(Ordering::Relaxed));
+
+                                        // Consensus Endpoints (TLS)
+                                        let _ = writeln!(&mut out, "# HELP phantom_node_consensus_select_attestors_total Consensus select_attestors requests total");
+                                        let _ = writeln!(&mut out, "# TYPE phantom_node_consensus_select_attestors_total counter");
+                                        let _ = writeln!(&mut out, "phantom_node_consensus_select_attestors_total {}", NODE_CONSENSUS_SELECT_ATTESTORS_TOTAL.load(Ordering::Relaxed));
+                                        let _ = writeln!(&mut out, "# HELP phantom_node_consensus_select_attestors_fair_total Consensus select_attestors_fair requests total");
+                                        let _ = writeln!(&mut out, "# TYPE phantom_node_consensus_select_attestors_fair_total counter");
+                                        let _ = writeln!(&mut out, "phantom_node_consensus_select_attestors_fair_total {}", NODE_CONSENSUS_SELECT_ATTESTORS_FAIR_TOTAL.load(Ordering::Relaxed));
+                                        let _ = writeln!(&mut out, "# HELP phantom_node_consensus_agg_sigs_total Consensus attestor_aggregate_sigs requests total");
+                                        let _ = writeln!(&mut out, "# TYPE phantom_node_consensus_agg_sigs_total counter");
+                                        let _ = writeln!(&mut out, "phantom_node_consensus_agg_sigs_total {}", NODE_CONSENSUS_AGG_SIGS_TOTAL.load(Ordering::Relaxed));
+                                        let _ = writeln!(&mut out, "# HELP phantom_node_consensus_fast_verify_total Consensus fast_verify requests total");
+                                        let _ = writeln!(&mut out, "# TYPE phantom_node_consensus_fast_verify_total counter");
+                                        let _ = writeln!(&mut out, "phantom_node_consensus_fast_verify_total {}", NODE_CONSENSUS_FAST_VERIFY_TOTAL.load(Ordering::Relaxed));
+                                        let _ = writeln!(&mut out, "# HELP phantom_node_consensus_fast_verify_valid_total Consensus fast_verify valid results total");
+                                        let _ = writeln!(&mut out, "# TYPE phantom_node_consensus_fast_verify_valid_total counter");
+                                        let _ = writeln!(&mut out, "phantom_node_consensus_fast_verify_valid_total {}", NODE_CONSENSUS_FAST_VERIFY_VALID_TOTAL.load(Ordering::Relaxed));
+                                        let _ = writeln!(&mut out, "# HELP phantom_node_consensus_fast_verify_seats_total Consensus fast_verify_seats requests total");
+                                        let _ = writeln!(&mut out, "# TYPE phantom_node_consensus_fast_verify_seats_total counter");
+                                        let _ = writeln!(&mut out, "phantom_node_consensus_fast_verify_seats_total {}", NODE_CONSENSUS_FAST_VERIFY_SEATS_TOTAL.load(Ordering::Relaxed));
+                                        let _ = writeln!(&mut out, "# HELP phantom_node_consensus_fast_verify_seats_valid_total Consensus fast_verify_seats valid results total");
+                                        let _ = writeln!(&mut out, "# TYPE phantom_node_consensus_fast_verify_seats_valid_total counter");
+                                        let _ = writeln!(&mut out, "phantom_node_consensus_fast_verify_seats_valid_total {}", NODE_CONSENSUS_FAST_VERIFY_SEATS_VALID_TOTAL.load(Ordering::Relaxed));
+                                        let _ = writeln!(&mut out, "# HELP phantom_node_consensus_payout_root_total Consensus payout_root requests total");
+                                        let _ = writeln!(&mut out, "# TYPE phantom_node_consensus_payout_root_total counter");
+                                        let _ = writeln!(&mut out, "phantom_node_consensus_payout_root_total {}", NODE_CONSENSUS_PAYOUT_ROOT_TOTAL.load(Ordering::Relaxed));
+                                        let _ = writeln!(&mut out, "# HELP phantom_node_consensus_payout_proof_total Consensus payout_proof requests total");
+                                        let _ = writeln!(&mut out, "# TYPE phantom_node_consensus_payout_proof_total counter");
+                                        let _ = writeln!(&mut out, "phantom_node_consensus_payout_proof_total {}", NODE_CONSENSUS_PAYOUT_PROOF_TOTAL.load(Ordering::Relaxed));
+
                                         let mut resp = Response::builder().status(200).body(Body::from(out)).unwrap();
                                         resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("text/plain; version=0.0.4"));
                                         return Ok::<_, anyhow::Error>(resp);
@@ -2381,6 +2448,17 @@ static NODE_RPC_BROADCAST_TOTAL: AtomicU64 = AtomicU64::new(0);
 static NODE_RPC_BROADCAST_ACCEPTED_TOTAL: AtomicU64 = AtomicU64::new(0);
 static NODE_RPC_BROADCAST_DUP_TOTAL: AtomicU64 = AtomicU64::new(0);
 static NODE_RPC_BROADCAST_ERRORS_TOTAL: AtomicU64 = AtomicU64::new(0);
+
+// Consensus HTTP Endpoints Metriken
+static NODE_CONSENSUS_SELECT_ATTESTORS_TOTAL: AtomicU64 = AtomicU64::new(0);
+static NODE_CONSENSUS_SELECT_ATTESTORS_FAIR_TOTAL: AtomicU64 = AtomicU64::new(0);
+static NODE_CONSENSUS_AGG_SIGS_TOTAL: AtomicU64 = AtomicU64::new(0);
+static NODE_CONSENSUS_FAST_VERIFY_TOTAL: AtomicU64 = AtomicU64::new(0);
+static NODE_CONSENSUS_FAST_VERIFY_VALID_TOTAL: AtomicU64 = AtomicU64::new(0);
+static NODE_CONSENSUS_FAST_VERIFY_SEATS_TOTAL: AtomicU64 = AtomicU64::new(0);
+static NODE_CONSENSUS_FAST_VERIFY_SEATS_VALID_TOTAL: AtomicU64 = AtomicU64::new(0);
+static NODE_CONSENSUS_PAYOUT_ROOT_TOTAL: AtomicU64 = AtomicU64::new(0);
+static NODE_CONSENSUS_PAYOUT_PROOF_TOTAL: AtomicU64 = AtomicU64::new(0);
 
 // Disk-Read Latenz (Header/Payload) als Histogramm (Buckets analog P2P: 1ms,5ms,10ms,50ms,100ms,500ms,+Inf)
 static NODE_STORE_HDR_READ_COUNT: AtomicU64 = AtomicU64::new(0);
