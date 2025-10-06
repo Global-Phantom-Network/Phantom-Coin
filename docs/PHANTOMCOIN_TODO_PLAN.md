@@ -83,9 +83,14 @@ Status-Legende: in_progress, pending, completed
   Committee‑Selektion/Rotation: VRF aus finalisiertem Seed; Anti‑Kollokation (max 1 Seat/Shard/Operator); Eligibility via Heartbeat; Attendance/Cooldown.  
   Akzeptanz: deterministische Auswahl, Tests für Kollision/Skip.
 
-- t13_attestor_pools — Status: pending — Prio: hoch  
+- t13_attestor_pools — Status: completed — Prio: hoch  
   Attestor‑Pools: VRF‑Sampling (M≈128), Signatur‑Aggregation, optional Performance‑Index (PI) mit Caps; Claim‑Pfad.  
-  Akzeptanz: Aggregat‑Signaturen verifizierbar, gerechte Verteilung.
+  Akzeptanz: Aggregat‑Signaturen verifizierbar, gerechte Verteilung.  
+  Referenzen:  
+  - crates/phantom-node/src/main.rs  
+  - crates/phantom-node/README.md  
+  - crates/pc-consensus/src/committee_vrf.rs  
+  - crates/pc-crypto/src/bls.rs
 
 - t14_da_gating — Status: pending — Prio: hoch  
   DA‑Gating: strikt pull‑then‑vote; kein Vote/Ack ohne lokale Daten; Schnittstellen zu Storage/Fetcher.  
