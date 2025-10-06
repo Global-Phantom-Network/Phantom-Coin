@@ -26,6 +26,13 @@ pub fn blake3_32(data: &[u8]) -> Hash32 {
     out
 }
 
+/// Merkle-Proof Schritt mit Richtungsbit: `right=true` bedeutet, dass der Sibling rechts vom aktuellen Knoten lag
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MerkleStep {
+    pub hash: Hash32,
+    pub right: bool,
+}
+
 // Attestor-Recipient-ID aus BLS-Public-Key (Domain-separiert)
 const ATTESTOR_PK_DOMAIN: &[u8] = b"pc:attest:pk:v1\x01";
 
@@ -122,6 +129,51 @@ pub fn merkle_root_hashes(leaves: &[Hash32]) -> Hash32 {
         level = next;
     }
     level.pop().unwrap_or_default()
+}
+
+/// Erzeugt einen Merkle-Proof (mit Richtungsbits) für einen Leaf-Index gemäß `merkle_root_hashes`.
+/// Nutzt die identische Paarungsregel (ungerade Anzahl → Dupliziere letztes Leaf).
+pub fn merkle_build_proof(leaves: &[Hash32], mut index: usize) -> Vec<MerkleStep> {
+    let mut proof: Vec<MerkleStep> = Vec::new();
+    if leaves.is_empty() { return proof; }
+    let mut level: Vec<Hash32> = leaves.to_vec();
+    while level.len() > 1 {
+        let mut next: Vec<Hash32> = Vec::with_capacity(level.len().div_ceil(2));
+        let mut i = 0usize;
+        while i < level.len() {
+            let left = level[i];
+            let right = if i + 1 < level.len() { level[i+1] } else { left };
+            if index == i {
+                proof.push(MerkleStep { hash: right, right: true });
+            } else if index == i + 1 {
+                proof.push(MerkleStep { hash: left, right: false });
+            }
+            let mut data = [0u8; MRKL_PAIR_DOMAIN.len() + 64];
+            for (dst, src) in data.iter_mut().zip(MRKL_PAIR_DOMAIN.iter()) { *dst = *src; }
+            for (dst, src) in data.iter_mut().skip(MRKL_PAIR_DOMAIN.len()).take(32).zip(left.iter()) { *dst = *src; }
+            for (dst, src) in data.iter_mut().skip(MRKL_PAIR_DOMAIN.len() + 32).zip(right.iter()) { *dst = *src; }
+            let parent = blake3_32(&data);
+            next.push(parent);
+            if index == i || index == i + 1 { index = next.len() - 1; }
+            i += 2;
+        }
+        level = next;
+    }
+    proof
+}
+
+/// Verifiziert einen Merkle-Proof gegen einen erwarteten Root; der Leaf wird als Hash (bereits dom-separiert) erwartet.
+pub fn merkle_verify_with_proof(leaf: &Hash32, proof: &[MerkleStep], expected_root: &Hash32) -> bool {
+    let mut acc = *leaf;
+    for step in proof {
+        let (left, right) = if step.right { (acc, step.hash) } else { (step.hash, acc) };
+        let mut data = [0u8; MRKL_PAIR_DOMAIN.len() + 64];
+        for (dst, src) in data.iter_mut().zip(MRKL_PAIR_DOMAIN.iter()) { *dst = *src; }
+        for (dst, src) in data.iter_mut().skip(MRKL_PAIR_DOMAIN.len()).take(32).zip(left.iter()) { *dst = *src; }
+        for (dst, src) in data.iter_mut().skip(MRKL_PAIR_DOMAIN.len() + 32).zip(right.iter()) { *dst = *src; }
+        acc = blake3_32(&data);
+    }
+    &acc == expected_root
 }
 
 #[cfg(test)]

@@ -11,12 +11,101 @@
 use pc_types::{
     Amount, AnchorHeader, AnchorId, AnchorIndex, EvidenceKind, MintEvent, PayoutEntry, PayoutSet,
 };
+use pc_types::{AnchorHeaderV2, AnchorPayloadV2, GenesisNote};
+use pc_types::{genesis_payload_root, digest_genesis_note, payload_merkle_root_v2, NetworkId};
 pub mod consts;
+pub mod committee_vrf;
+pub mod attestor_pool;
 
 #[derive(Debug)]
 pub enum ConsensusError {
     IndexOutOfRange,
     InvalidParams,
+}
+
+// ============================
+// Leere Anker (V2, i>0)
+// ============================
+/// Ein V2‑Payload gilt als "leer", wenn keine Transaktionen/Mints/Claims/Evidences enthalten sind
+/// und keine Genesis‑Note eingebettet ist. Der `payout_root` darf 0x00..00 sein.
+#[inline]
+pub fn is_empty_anchor_v2(p: &AnchorPayloadV2) -> bool {
+    p.genesis_note.is_none()
+        && p.micro_txs.is_empty()
+        && p.mints.is_empty()
+        && p.claims.is_empty()
+        && p.evidences.is_empty()
+}
+
+/// Validiert einen leeren V2‑Anker gegen den berechneten Payload‑Merkle‑Root.
+/// Für i>0 muss `is_empty_anchor_v2(payload)` gelten und `header.payload_hash`
+/// muss `payload_merkle_root_v2(payload)` entsprechen.
+pub fn validate_empty_anchor_v2(h: &AnchorHeaderV2, p: &AnchorPayloadV2) -> Result<(), ConsensusError> {
+    if !is_empty_anchor_v2(p) {
+        return Err(ConsensusError::InvalidParams);
+    }
+    let root = payload_merkle_root_v2(p);
+    if h.payload_hash != root {
+        return Err(ConsensusError::InvalidParams);
+    }
+    Ok(())
+}
+
+// ============================
+// Genesis A0 Validierung (V2)
+// ============================
+/// Prüft A0 gemäß Spezifikation und liefert die abgeleitete NetworkId zurück.
+/// Regeln:
+/// - parents.len == 0 (Genesis hat keinen Vorgänger)
+/// - payload_root == genesis_payload_root(genesis_note)
+/// - header.network_id == digest_genesis_note(genesis_note)
+/// - Parameter-Constraints (committee_k in 1..=64, shards_initial>=1, txs_per_payload>=1)
+pub fn validate_genesis_anchor(h: &AnchorHeaderV2, p: &AnchorPayloadV2) -> Result<NetworkId, ConsensusError> {
+    // Versionen prüfen
+    if h.version != 2 || p.version != 2 {
+        return Err(ConsensusError::InvalidParams);
+    }
+    // Keine Parents
+    if (h.parents.len as usize) != 0 {
+        return Err(ConsensusError::InvalidParams);
+    }
+    // Genesis-Note muss vorhanden sein
+    let note: &GenesisNote = match p.genesis_note.as_ref() {
+        Some(n) => n,
+        None => return Err(ConsensusError::InvalidParams),
+    };
+    // Param-Constraints
+    if !(note.params.committee_k >= 1 && note.params.committee_k <= 64) {
+        return Err(ConsensusError::InvalidParams);
+    }
+    if note.params.shards_initial < 1 { return Err(ConsensusError::InvalidParams); }
+    if note.params.txs_per_payload < 1 { return Err(ConsensusError::InvalidParams); }
+
+    let pl_root = genesis_payload_root(note);
+    if h.payload_hash != pl_root { return Err(ConsensusError::InvalidParams); }
+    let nid = digest_genesis_note(note);
+    if h.network_id != nid { return Err(ConsensusError::InvalidParams); }
+    Ok(nid)
+}
+
+#[cfg(test)]
+mod genesis_tests {
+    use super::*;
+    #[test]
+    fn validate_genesis_anchor_ok() {
+        let note = GenesisNote { version:0, network_name:b"phantom-dev".to_vec(), seed:[0x42;32], params: pc_types::GenesisParams{ shards_initial:64, committee_k:21, txs_per_payload:256, features:0 } };
+        let pl = AnchorPayloadV2 { version:2, micro_txs:vec![], mints:vec![], claims:vec![], evidences:vec![], payout_root: genesis_payload_root(&note), genesis_note: Some(note.clone()) };
+        let h = AnchorHeaderV2 { version:2, shard_id:0, parents: pc_types::ParentList::default(), payload_hash: genesis_payload_root(&note), creator_index:0, vote_mask:0, ack_present:false, ack_id: pc_types::AnchorId([0u8;32]), network_id: digest_genesis_note(&note) };
+        let nid = validate_genesis_anchor(&h, &pl).expect("valid");
+        assert_eq!(nid, digest_genesis_note(&note));
+    }
+    #[test]
+    fn validate_genesis_anchor_fails_on_params() {
+        let bad = GenesisNote { version:0, network_name:b"x".to_vec(), seed:[0;32], params: pc_types::GenesisParams{ shards_initial:0, committee_k:0, txs_per_payload:0, features:0 } };
+        let pl = AnchorPayloadV2 { version:2, micro_txs:vec![], mints:vec![], claims:vec![], evidences:vec![], payout_root: genesis_payload_root(&bad), genesis_note: Some(bad.clone()) };
+        let h = AnchorHeaderV2 { version:2, shard_id:0, parents: pc_types::ParentList::default(), payload_hash: genesis_payload_root(&bad), creator_index:0, vote_mask:0, ack_present:false, ack_id: pc_types::AnchorId([0u8;32]), network_id: digest_genesis_note(&bad) };
+        assert!(validate_genesis_anchor(&h, &pl).is_err());
+    }
 }
 
 /// Komfort: Erzeugt Attestor-Payout direkt aus BLS-Public-Keys (IDs via Domain-Hash)
@@ -712,6 +801,8 @@ pub struct ConsensusConfig {
     pub k: u8,
     /// Fee-Split-Parameter (Basispunkte etc.)
     pub fee_params: FeeSplitParams,
+    /// Bootstrap-Fenster: effektives k=1 bis zur ersten Rotation
+    pub bootstrap_k1: bool,
 }
 
 impl ConsensusConfig {
@@ -720,12 +811,23 @@ impl ConsensusConfig {
         Self {
             k,
             fee_params: FeeSplitParams::recommended(),
+            bootstrap_k1: false,
         }
+    }
+
+    /// Setzt das Bootstrap-Fenster (effektives k=1) explizit.
+    pub fn with_bootstrap_k1(mut self, flag: bool) -> Self {
+        self.bootstrap_k1 = flag;
+        self
+    }
+
+    /// Liefert das wirksame k (1, falls Bootstrap aktiv; sonst konfiguriertes k).
+    #[inline]
+    pub fn effective_k(&self) -> u8 {
+        if self.bootstrap_k1 { 1 } else { self.k }
     }
 }
 
-/// Konsens-Engine kapselt Graph/Cache und stellt API für Ack-Distanzen,
-/// Finalitätsprüfung sowie (Committee-)Payout bereit.
 pub struct ConsensusEngine {
     cfg: ConsensusConfig,
     cache: AnchorGraphCache,
@@ -746,7 +848,7 @@ impl ConsensusEngine {
 
     /// Berechne Ack-Distanzen für gegebenes ack_id gemäß Engine-Parametern (k,d_max)
     pub fn ack_distances(&mut self, ack_id: AnchorId) -> Vec<Option<u8>> {
-        let k = self.cfg.k;
+        let k = self.cfg.effective_k();
         let d_max = self.cfg.fee_params.d_max;
         self.cache.compute_ack_distances(ack_id, k, d_max)
     }
@@ -754,7 +856,17 @@ impl ConsensusEngine {
     /// Prüfe Finalität über vote_mask-Popcount gegen Threshold T=floor(2k/3)+1
     /// Erwartet, dass das übergebene vote_mask die Stimmen der k Seats kodiert (u64 reicht k<=64)
     pub fn is_final_mask(&self, vote_mask: u64) -> bool {
-        is_final(popcount_u64(vote_mask), self.cfg.k)
+        is_final(popcount_u64(vote_mask), self.cfg.effective_k())
+    }
+
+    /// Bootstrap‑Modus ein/aus (wirksames k=1, wenn aktiv)
+    pub fn set_bootstrap_k1(&mut self, flag: bool) {
+        self.cfg.bootstrap_k1 = flag;
+    }
+
+    /// Gibt zurück, ob Bootstrap‑Modus aktiv ist
+    pub fn bootstrap_k1(&self) -> bool {
+        self.cfg.bootstrap_k1
     }
 
     /// Erzeugt die Committee-Payout-Root für ein gegebenes Ack (aus Graph) und Seats
