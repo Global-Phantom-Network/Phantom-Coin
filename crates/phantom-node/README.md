@@ -57,6 +57,20 @@ Status-/Broadcast-HTTP-Server und Node-Runtime-Hilfen.
     ```
   - Response: `{ "ok": true, "valid": true }`
 
+- POST `/consensus/attestor_fast_verify_seats` (Content-Type: `application/json`)
+  - Zweck: Wie `attestor_fast_verify`, jedoch werden die Public Keys aus `seats`-Einträgen bezogen (z. B. aus der Auswahl zurückgeliefert).
+  - Request:
+    ```json
+    {
+      "network_id": "<hex32>",
+      "epoch": 1,
+      "topic": "<hex>",
+      "seats": [{"bls_pk":"<hex48>"}, {"bls_pk":"<hex48>"}],
+      "agg_sig": "<hex96>"
+    }
+    ```
+  - Response: `{ "ok": true, "valid": true }`
+
 - GET `/consensus/config`
   - Liefert die effektive Rotation-Konfiguration (inkl. Defaults oder CLI-Overrides):
     ```json

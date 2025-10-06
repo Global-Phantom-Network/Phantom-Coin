@@ -124,7 +124,32 @@ async fn bls_agg_endpoints_e2e() {
     assert!(v.get("ok").and_then(|x| x.as_bool()).unwrap_or(false));
     assert_eq!(v.get("valid").and_then(|x| x.as_bool()).unwrap_or(false), true);
 
-    // 6) Aufräumen
+    // 6) Fast Verify (seats-basiert)
+    let verify_seats_body = serde_json::json!({
+        "network_id": hex32(&network_id),
+        "epoch": epoch,
+        "topic": hex::encode(&topic),
+        "seats": [
+            {"bls_pk": hex48(&kp1.pk.to_bytes())},
+            {"bls_pk": hex48(&kp2.pk.to_bytes())}
+        ],
+        "agg_sig": agg_sig_hex,
+    });
+    let uri_vs: Uri = format!("http://{}/consensus/attestor_fast_verify_seats", addr).parse().unwrap();
+    let req_vs = Request::builder()
+        .method(Method::POST)
+        .uri(uri_vs)
+        .header("content-type", "application/json")
+        .body(Body::from(verify_seats_body.to_string()))
+        .unwrap();
+    let resp_vs = client.request(req_vs).await.expect("verify seats resp");
+    assert_eq!(resp_vs.status(), StatusCode::OK);
+    let body_vs = hyper::body::to_bytes(resp_vs.into_body()).await.expect("verify seats body");
+    let v2: serde_json::Value = serde_json::from_slice(&body_vs).expect("verify seats json");
+    assert!(v2.get("ok").and_then(|x| x.as_bool()).unwrap_or(false));
+    assert_eq!(v2.get("valid").and_then(|x| x.as_bool()).unwrap_or(false), true);
+
+    // 7) Aufräumen
     let _ = child.kill();
     let _ = child.wait();
 }
