@@ -35,6 +35,28 @@ Status-/Broadcast-HTTP-Server und Node-Runtime-Hilfen.
     }
     ```
 
+- POST `/consensus/attestor_aggregate_sigs` (Content-Type: `application/json`)
+  - Zweck: Aggregiert mehrere BLS‑Signaturen (G2) für dieselbe Nachricht.
+  - Request:
+    ```json
+    { "parts": ["<hex96>", "<hex96>"] }
+    ```
+  - Response: `{ "ok": true, "agg_sig": "<hex96>" }`
+
+- POST `/consensus/attestor_fast_verify` (Content-Type: `application/json`)
+  - Zweck: Schnelle Verifikation einer Aggregat‑Signatur für dieselbe Nachricht über mehrere Public Keys.
+  - Request:
+    ```json
+    {
+      "network_id": "<hex32>",
+      "epoch": 1,
+      "topic": "<hex>",
+      "bls_pks": ["<hex48>", "<hex48>"],
+      "agg_sig": "<hex96>"
+    }
+    ```
+  - Response: `{ "ok": true, "valid": true }`
+
 - GET `/consensus/config`
   - Liefert die effektive Rotation-Konfiguration (inkl. Defaults oder CLI-Overrides):
     ```json

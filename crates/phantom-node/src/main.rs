@@ -25,8 +25,9 @@ use pc_consensus::{
 use pc_crypto::blake3_32;
 use pc_crypto::{payout_leaf_hash, merkle_build_proof};
 use pc_crypto::bls_pk_from_bytes;
+use pc_crypto::bls_fast_aggregate_verify;
 use pc_consensus::committee_vrf::{RotationParams as VrfRotationParams, VrfCandidate, SelectedSeat, committee_select_vrf, derive_epoch, derive_vrf_seed};
-use pc_consensus::attestor_pool::{attestor_sample_vrf, attestor_sample_vrf_fair};
+use pc_consensus::attestor_pool::{attestor_sample_vrf, attestor_sample_vrf_fair, attestor_aggregate_sigs, attestation_message};
 use pc_p2p::async_svc::{
     inbound_subscribe, metrics_snapshot, outbox_deq_inc, OutboundSink, StoreDelegate,
 };
@@ -1155,6 +1156,79 @@ if whole.len() > MAX_HTTP_BODY_BYTES {
                         "payout_root": hex::encode(root),
                         "proof": steps
                     }).to_string();
+                    let mut resp = Response::builder().status(200).body(Body::from(body)).unwrap();
+                    resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json"));
+                    return Ok::<_, anyhow::Error>(resp);
+                } else if req.uri().path() == "/consensus/attestor_aggregate_sigs" && req.method() == hyper::Method::POST {
+                    #[derive(serde::Deserialize)]
+                    struct AggReq { parts: Vec<String> }
+                    let whole_pre = match tokio::time::timeout(std::time::Duration::from_secs(5), hyper::body::to_bytes(req.into_body())).await {
+    Ok(v) => v,
+    Err(_e) => {
+        let mut resp = Response::builder().status(408).body(Body::from("{\"ok\":false,\"error\":\"read timeout\"}".to_string())).unwrap();
+        resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json"));
+        return Ok::<_, anyhow::Error>(resp);
+    }
+};
+let whole = match whole_pre { Ok(b)=>b, Err(e)=> { let mut resp=Response::builder().status(400).body(Body::from(format!("{{\"ok\":false,\"error\":\"read body: {}\"}}", e))).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); return Ok::<_, anyhow::Error>(resp);} };
+if whole.len() > MAX_HTTP_BODY_BYTES {
+    let mut resp = Response::builder().status(413).body(Body::from("{\"ok\":false,\"error\":\"body too large\"}".to_string())).unwrap();
+    resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json"));
+    return Ok::<_, anyhow::Error>(resp);
+}
+                    let reqv: AggReq = match serde_json::from_slice(&whole) { Ok(v)=>v, Err(e)=> { let mut resp=Response::builder().status(400).body(Body::from(format!("{{\"ok\":false,\"error\":\"bad json: {}\"}}", e))).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); return Ok::<_, anyhow::Error>(resp);} };
+                    let mut sigs: Vec<[u8;96]> = Vec::with_capacity(reqv.parts.len());
+                    for s in reqv.parts.iter() {
+                        if s.len() != 192 { let mut resp=Response::builder().status(400).body(Body::from("{\"ok\":false,\"error\":\"bad sig length\"}".to_string())).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); return Ok::<_, anyhow::Error>(resp); }
+                        let mut arr = [0u8;96];
+                        match hex::decode(s) { Ok(b) if b.len()==96 => { arr.copy_from_slice(&b); sigs.push(arr); }, _ => { let mut resp=Response::builder().status(400).body(Body::from("{\"ok\":false,\"error\":\"bad sig hex\"}".to_string())).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); return Ok::<_, anyhow::Error>(resp); } }
+                    }
+                    match attestor_aggregate_sigs(&sigs) {
+                        Some(agg) => {
+                            let body = serde_json::json!({"ok":true, "agg_sig": hex::encode(agg)}).to_string();
+                            let mut resp = Response::builder().status(200).body(Body::from(body)).unwrap();
+                            resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json"));
+                            return Ok::<_, anyhow::Error>(resp);
+                        }
+                        None => {
+                            let mut resp = Response::builder().status(400).body(Body::from("{\"ok\":false,\"error\":\"aggregate failed\"}".to_string())).unwrap();
+                            resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json"));
+                            return Ok::<_, anyhow::Error>(resp);
+                        }
+                    }
+                } else if req.uri().path() == "/consensus/attestor_fast_verify" && req.method() == hyper::Method::POST {
+                    #[derive(serde::Deserialize)]
+                    struct VerifyReq { network_id: String, epoch: u64, topic: String, bls_pks: Vec<String>, agg_sig: String }
+                    fn hex32(s: &str) -> Option<[u8;32]> { let mut out=[0u8;32]; if s.len()!=64 { return None; } let raw=hex::decode(s).ok()?; if raw.len()!=32 { return None; } out.copy_from_slice(&raw); Some(out) }
+                    fn hex48(s: &str) -> Option<[u8;48]> { let mut out=[0u8;48]; if s.len()!=96 { return None; } let raw=hex::decode(s).ok()?; if raw.len()!=48 { return None; } out.copy_from_slice(&raw); Some(out) }
+                    fn hex96(s: &str) -> Option<[u8;96]> { let mut out=[0u8;96]; if s.len()!=192 { return None; } let raw=hex::decode(s).ok()?; if raw.len()!=96 { return None; } out.copy_from_slice(&raw); Some(out) }
+                    let whole_pre = match tokio::time::timeout(std::time::Duration::from_secs(5), hyper::body::to_bytes(req.into_body())).await {
+    Ok(v) => v,
+    Err(_e) => {
+        let mut resp = Response::builder().status(408).body(Body::from("{\"ok\":false,\"error\":\"read timeout\"}".to_string())).unwrap();
+        resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json"));
+        return Ok::<_, anyhow::Error>(resp);
+    }
+};
+let whole = match whole_pre { Ok(b)=>b, Err(e)=> { let mut resp=Response::builder().status(400).body(Body::from(format!("{{\"ok\":false,\"error\":\"read body: {}\"}}", e))).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); return Ok::<_, anyhow::Error>(resp);} };
+if whole.len() > MAX_HTTP_BODY_BYTES {
+    let mut resp = Response::builder().status(413).body(Body::from("{\"ok\":false,\"error\":\"body too large\"}".to_string())).unwrap();
+    resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json"));
+    return Ok::<_, anyhow::Error>(resp);
+}
+                    let reqv: VerifyReq = match serde_json::from_slice(&whole) { Ok(v)=>v, Err(e)=> { let mut resp=Response::builder().status(400).body(Body::from(format!("{{\"ok\":false,\"error\":\"bad json: {}\"}}", e))).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); return Ok::<_, anyhow::Error>(resp);} };
+                    let nid = match hex32(&reqv.network_id) { Some(v)=>v, None=> { let mut resp=Response::builder().status(400).body(Body::from("{\"ok\":false,\"error\":\"bad network_id\"}".to_string())).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); return Ok::<_, anyhow::Error>(resp); } };
+                    let topic_bytes = match hex::decode(&reqv.topic) { Ok(v)=>v, Err(_)=> { let mut resp=Response::builder().status(400).body(Body::from("{\"ok\":false,\"error\":\"bad topic hex\"}".to_string())).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); return Ok::<_, anyhow::Error>(resp);} };
+                    let msg = attestation_message(&nid, reqv.epoch, &topic_bytes);
+                    let mut pks: Vec<pc_crypto::BlsPublicKey> = Vec::with_capacity(reqv.bls_pks.len());
+                    for s in reqv.bls_pks.iter() {
+                        let kb = match hex48(s) { Some(v)=>v, None=> { let mut resp=Response::builder().status(400).body(Body::from("{\"ok\":false,\"error\":\"bad bls_pk\"}".to_string())).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); return Ok::<_, anyhow::Error>(resp);} };
+                        let pk = match bls_pk_from_bytes(&kb) { Some(p)=>p, None=> { let mut resp=Response::builder().status(400).body(Body::from("{\"ok\":false,\"error\":\"invalid bls_pk\"}".to_string())).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); return Ok::<_, anyhow::Error>(resp);} };
+                        pks.push(pk);
+                    }
+                    let agg = match hex96(&reqv.agg_sig) { Some(v)=>v, None=> { let mut resp=Response::builder().status(400).body(Body::from("{\"ok\":false,\"error\":\"bad agg_sig\"}".to_string())).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); return Ok::<_, anyhow::Error>(resp);} };
+                    let ok = bls_fast_aggregate_verify(&msg, &agg, &pks);
+                    let body = serde_json::json!({"ok": true, "valid": ok}).to_string();
                     let mut resp = Response::builder().status(200).body(Body::from(body)).unwrap();
                     resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json"));
                     return Ok::<_, anyhow::Error>(resp);
