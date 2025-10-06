@@ -42,7 +42,7 @@ async fn vrf_endpoints_e2e() {
     std::fs::create_dir_all(&mempool_dir).expect("create mempool dir");
 
     // 2) Server als Child-Prozess starten (phantom-node StatusServe)
-    //    Suche freien Port im Bereich 18081..18100 und prüfe Readiness.
+    //    Fester Port mit großzügigem Readiness-Timeout.
     async fn wait_ready(client: &Client<hyper::client::HttpConnector>, addr: &str, secs: u64) -> bool {
         let deadline = Instant::now() + Duration::from_secs(secs);
         loop {
@@ -57,37 +57,32 @@ async fn vrf_endpoints_e2e() {
 
     let client: Client<hyper::client::HttpConnector> = Client::new();
     let bin = cargo_bin("phantom-node");
-    let (chosen_addr, mut child) = {
-        let mut chosen: Option<String> = None;
-        let mut child_opt: Option<std::process::Child> = None;
-        for port in 18081..=18100 {
-            let addr = format!("127.0.0.1:{}", port);
-            let child_try = Command::new(&bin)
-                .arg("StatusServe")
-                .arg("--addr").arg(&addr)
-                .arg("--mempool-dir").arg(mempool_dir.to_string_lossy().to_string())
-                .arg("--fsync").arg("false")
-                .stdin(Stdio::null())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn();
-            let mut child = match child_try { Ok(c) => c, Err(_) => { continue; } };
-            if wait_ready(&client, &addr, 3).await {
-                chosen = Some(addr);
-                child_opt = Some(child);
-                break;
-            } else {
-                let _ = child.kill();
-                let _ = child.wait();
-            }
-        }
-        let addr = chosen.expect("server not ready on any port in range");
-        let child = child_opt.expect("child missing despite readiness");
-        (addr, child)
+    // Wähle freien Port per Ephemeral-Bind
+    let port = {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral");
+        let p = l.local_addr().unwrap().port();
+        drop(l);
+        p
     };
-    // endgültige Readiness bis 10s (stabilisieren)
-    assert!(wait_ready(&client, &chosen_addr, 10).await, "server not ready in time");
-    let addr = chosen_addr.as_str();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = Command::new(&bin)
+        .arg("status-serve")
+        .arg("--addr").arg(&addr)
+        .arg("--mempool-dir").arg(mempool_dir.to_string_lossy().to_string())
+        .stdin(Stdio::null())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .expect("spawn phantom-node status-serve");
+    // Readiness mit Prozess-Liveness koppeln
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        if Instant::now() > deadline { panic!("server not ready in time"); }
+        if let Ok(Some(status)) = child.try_wait() {
+            panic!("status-serve exited early: {:?}", status);
+        }
+        if wait_ready(&client, &addr, 1).await { break; }
+    }
 
     // 4) VRF-Testdaten generieren: Keypair, Proofs
     use pc_crypto::{blake3_32, bls_keygen_from_ikm, bls_vrf_prove};
