@@ -113,6 +113,36 @@ struct NodeConsensusCfg {
     rotation: Option<NodeRotationCfg>,
 }
 
+#[derive(Debug, Deserialize, Clone, Default)]
+struct HttpRateRule {
+    #[serde(default)]
+    capacity: u64,
+    #[serde(default)]
+    refill_per_sec: u64,
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
+struct HttpRateCfg {
+    #[serde(default)]
+    select_committee: Option<HttpRateRule>,
+    #[serde(default)]
+    select_committee_persist: Option<HttpRateRule>,
+    #[serde(default)]
+    select_attestors: Option<HttpRateRule>,
+    #[serde(default)]
+    select_attestors_fair: Option<HttpRateRule>,
+    #[serde(default)]
+    attestor_payout_root: Option<HttpRateRule>,
+    #[serde(default)]
+    attestor_payout_proof: Option<HttpRateRule>,
+    #[serde(default)]
+    attestor_aggregate_sigs: Option<HttpRateRule>,
+    #[serde(default)]
+    attestor_fast_verify: Option<HttpRateRule>,
+    #[serde(default)]
+    attestor_fast_verify_seats: Option<HttpRateRule>,
+}
+
 #[derive(Debug, Deserialize)]
 struct StatusConfig {
     addr: String,
@@ -131,12 +161,46 @@ struct StatusConfig {
     tls_client_ca: Option<String>,
     #[serde(default)]
     consensus: Option<NodeConsensusCfg>,
+    #[serde(default)]
+    http_rate: Option<HttpRateCfg>,
 }
 
 fn default_true() -> bool { true }
 
 // Globaler In-Memory-Cache für das zuletzt persistierte VRF-Komitee (als JSON)
 static VRF_COMMITTEE: once_cell::sync::OnceCell<tokio::sync::Mutex<Option<serde_json::Value>>> = once_cell::sync::OnceCell::new();
+
+// Einfache Token-Bucket-Rate-Limiter-Implementierung (pro Endpoint)
+struct SimpleRate {
+    cap: f64,
+    refill_per_sec: f64,
+    tokens: f64,
+    last: std::time::Instant,
+}
+
+impl SimpleRate {
+    fn new(rule: &HttpRateRule) -> Self {
+        let cap = rule.capacity as f64;
+        let refill = rule.refill_per_sec as f64;
+        SimpleRate { cap, refill_per_sec: refill, tokens: cap, last: std::time::Instant::now() }
+    }
+}
+
+async fn rate_allow(bucket: &tokio::sync::Mutex<SimpleRate>) -> bool {
+    let mut b = bucket.lock().await;
+    let now = std::time::Instant::now();
+    let dt = now.saturating_duration_since(b.last).as_secs_f64();
+    if dt > 0.0 {
+        b.tokens = (b.tokens + dt * b.refill_per_sec).min(b.cap);
+        b.last = now;
+    }
+    if b.tokens >= 1.0 {
+        b.tokens -= 1.0;
+        true
+    } else {
+        false
+    }
+}
 
 
 fn run_status_serve(args: &StatusServeArgs) -> Result<()> {
@@ -161,6 +225,12 @@ fn run_status_serve(args: &StatusServeArgs) -> Result<()> {
                 } else { None }
             } else { None }
         } else { None };
+        // HTTP-Rate-Limits laden (optional)
+        let http_rate_cfg: Option<HttpRateCfg> = if let Some(cfgp) = args.config.as_ref() {
+            if let Ok(raw) = std::fs::read_to_string(cfgp) {
+                if let Ok(cfg) = toml::from_str::<StatusConfig>(&raw) { cfg.http_rate } else { None }
+            } else { None }
+        } else { None };
         // CLI-Overrides anwenden (falls gesetzt)
         if let Some(v) = args.vrf_epoch_len {
             if let Some(ref mut r) = node_rot_cfg { r.epoch_len = Some(v); }
@@ -183,6 +253,7 @@ fn run_status_serve(args: &StatusServeArgs) -> Result<()> {
         let do_fsync = do_fsync;
         let require_auth = require_auth;
         let auth_token = auth_token;
+        let consensus_tls_only = tls_client_ca.is_some();
         // Auto‑Rotation: Hintergrundtask, der bei vorhandenem Kontext+Kandidaten die Auswahl pro Epoche persistiert
         {
             let mempool_dir_bg = mempool_dir.clone();
@@ -259,12 +330,31 @@ fn run_status_serve(args: &StatusServeArgs) -> Result<()> {
         let mempool_dir_http = mempool_dir.clone();
         let auth_token_http = auth_token.clone();
         let node_rot_cfg_http = node_rot_cfg.clone();
+        // HTTP Rate-Limiter Buckets (optional)
+        let rl_sc = http_rate_cfg.as_ref().and_then(|h| h.select_committee.as_ref()).map(|r| Arc::new(tokio::sync::Mutex::new(SimpleRate::new(r))));
+        let rl_scp = http_rate_cfg.as_ref().and_then(|h| h.select_committee_persist.as_ref()).map(|r| Arc::new(tokio::sync::Mutex::new(SimpleRate::new(r))));
+        let rl_sa = http_rate_cfg.as_ref().and_then(|h| h.select_attestors.as_ref()).map(|r| Arc::new(tokio::sync::Mutex::new(SimpleRate::new(r))));
+        let rl_saf = http_rate_cfg.as_ref().and_then(|h| h.select_attestors_fair.as_ref()).map(|r| Arc::new(tokio::sync::Mutex::new(SimpleRate::new(r))));
+        let rl_pr = http_rate_cfg.as_ref().and_then(|h| h.attestor_payout_root.as_ref()).map(|r| Arc::new(tokio::sync::Mutex::new(SimpleRate::new(r))));
+        let rl_pp = http_rate_cfg.as_ref().and_then(|h| h.attestor_payout_proof.as_ref()).map(|r| Arc::new(tokio::sync::Mutex::new(SimpleRate::new(r))));
+        let rl_as = http_rate_cfg.as_ref().and_then(|h| h.attestor_aggregate_sigs.as_ref()).map(|r| Arc::new(tokio::sync::Mutex::new(SimpleRate::new(r))));
+        let rl_fv = http_rate_cfg.as_ref().and_then(|h| h.attestor_fast_verify.as_ref()).map(|r| Arc::new(tokio::sync::Mutex::new(SimpleRate::new(r))));
+        let rl_fvs = http_rate_cfg.as_ref().and_then(|h| h.attestor_fast_verify_seats.as_ref()).map(|r| Arc::new(tokio::sync::Mutex::new(SimpleRate::new(r))));
         let make_svc = make_service_fn(move |_conn| {
             let mempool_dir = mempool_dir_http.clone();
             let do_fsync = do_fsync;
             let require_auth = require_auth;
             let auth_token = auth_token_http.clone();
             let node_rot_cfg = node_rot_cfg_http.clone();
+            let rl_sc = rl_sc.clone();
+            let rl_scp = rl_scp.clone();
+            let rl_sa = rl_sa.clone();
+            let rl_saf = rl_saf.clone();
+            let rl_pr = rl_pr.clone();
+            let rl_pp = rl_pp.clone();
+            let rl_as = rl_as.clone();
+            let rl_fv = rl_fv.clone();
+            let rl_fvs = rl_fvs.clone();
             async move {
                 Ok::<_, anyhow::Error>(service_fn(move |req: Request<Body>| {
                     let mempool_dir = mempool_dir.clone();
@@ -272,6 +362,15 @@ fn run_status_serve(args: &StatusServeArgs) -> Result<()> {
                     let require_auth = require_auth;
                     let auth_token = auth_token.clone();
                     let node_rot_cfg = node_rot_cfg.clone();
+                    let rl_sc = rl_sc.clone();
+                    let rl_scp = rl_scp.clone();
+                    let rl_sa = rl_sa.clone();
+                    let rl_saf = rl_saf.clone();
+                    let rl_pr = rl_pr.clone();
+                    let rl_pp = rl_pp.clone();
+                    let rl_as = rl_as.clone();
+                    let rl_fv = rl_fv.clone();
+                    let rl_fvs = rl_fvs.clone();
                     async move {
                         if req.uri().path() == "/status" && req.method() == hyper::Method::GET {
                     let ts = std::time::SystemTime::now()
@@ -353,6 +452,13 @@ fn run_status_serve(args: &StatusServeArgs) -> Result<()> {
                     let _ = writeln!(&mut out, "# HELP phantom_node_rpc_broadcast_errors_total RPC broadcast errors total");
                     let _ = writeln!(&mut out, "# TYPE phantom_node_rpc_broadcast_errors_total counter");
                     let _ = writeln!(&mut out, "phantom_node_rpc_broadcast_errors_total {}", NODE_RPC_BROADCAST_ERRORS_TOTAL.load(Ordering::Relaxed));
+                    // Consensus totals
+                    let _ = writeln!(&mut out, "# HELP phantom_node_consensus_select_committee_total Consensus select_committee requests total");
+                    let _ = writeln!(&mut out, "# TYPE phantom_node_consensus_select_committee_total counter");
+                    let _ = writeln!(&mut out, "phantom_node_consensus_select_committee_total {}", NODE_CONSENSUS_SELECT_COMMITTEE_TOTAL.load(Ordering::Relaxed));
+                    let _ = writeln!(&mut out, "# HELP phantom_node_consensus_select_committee_persist_total Consensus select_committee_persist requests total");
+                    let _ = writeln!(&mut out, "# TYPE phantom_node_consensus_select_committee_persist_total counter");
+                    let _ = writeln!(&mut out, "phantom_node_consensus_select_committee_persist_total {}", NODE_CONSENSUS_SELECT_COMMITTEE_PERSIST_TOTAL.load(Ordering::Relaxed));
 
                     // Consensus Endpoints
                     let _ = writeln!(&mut out, "# HELP phantom_node_consensus_select_attestors_total Consensus select_attestors requests total");
@@ -383,6 +489,35 @@ fn run_status_serve(args: &StatusServeArgs) -> Result<()> {
                     let _ = writeln!(&mut out, "# TYPE phantom_node_consensus_payout_proof_total counter");
                     let _ = writeln!(&mut out, "phantom_node_consensus_payout_proof_total {}", NODE_CONSENSUS_PAYOUT_PROOF_TOTAL.load(Ordering::Relaxed));
 
+                    // Error counters
+                    let _ = writeln!(&mut out, "# HELP phantom_node_consensus_select_committee_errors_total Consensus select_committee errors total");
+                    let _ = writeln!(&mut out, "# TYPE phantom_node_consensus_select_committee_errors_total counter");
+                    let _ = writeln!(&mut out, "phantom_node_consensus_select_committee_errors_total {}", NODE_CONSENSUS_SELECT_COMMITTEE_ERRORS_TOTAL.load(Ordering::Relaxed));
+                    let _ = writeln!(&mut out, "# HELP phantom_node_consensus_select_committee_persist_errors_total Consensus select_committee_persist errors total");
+                    let _ = writeln!(&mut out, "# TYPE phantom_node_consensus_select_committee_persist_errors_total counter");
+                    let _ = writeln!(&mut out, "phantom_node_consensus_select_committee_persist_errors_total {}", NODE_CONSENSUS_SELECT_COMMITTEE_PERSIST_ERRORS_TOTAL.load(Ordering::Relaxed));
+                    let _ = writeln!(&mut out, "# HELP phantom_node_consensus_select_attestors_errors_total Consensus select_attestors errors total");
+                    let _ = writeln!(&mut out, "# TYPE phantom_node_consensus_select_attestors_errors_total counter");
+                    let _ = writeln!(&mut out, "phantom_node_consensus_select_attestors_errors_total {}", NODE_CONSENSUS_SELECT_ATTESTORS_ERRORS_TOTAL.load(Ordering::Relaxed));
+                    let _ = writeln!(&mut out, "# HELP phantom_node_consensus_select_attestors_fair_errors_total Consensus select_attestors_fair errors total");
+                    let _ = writeln!(&mut out, "# TYPE phantom_node_consensus_select_attestors_fair_errors_total counter");
+                    let _ = writeln!(&mut out, "phantom_node_consensus_select_attestors_fair_errors_total {}", NODE_CONSENSUS_SELECT_ATTESTORS_FAIR_ERRORS_TOTAL.load(Ordering::Relaxed));
+                    let _ = writeln!(&mut out, "# HELP phantom_node_consensus_agg_sigs_errors_total Consensus attestor_aggregate_sigs errors total");
+                    let _ = writeln!(&mut out, "# TYPE phantom_node_consensus_agg_sigs_errors_total counter");
+                    let _ = writeln!(&mut out, "phantom_node_consensus_agg_sigs_errors_total {}", NODE_CONSENSUS_AGG_SIGS_ERRORS_TOTAL.load(Ordering::Relaxed));
+                    let _ = writeln!(&mut out, "# HELP phantom_node_consensus_fast_verify_errors_total Consensus fast_verify errors total");
+                    let _ = writeln!(&mut out, "# TYPE phantom_node_consensus_fast_verify_errors_total counter");
+                    let _ = writeln!(&mut out, "phantom_node_consensus_fast_verify_errors_total {}", NODE_CONSENSUS_FAST_VERIFY_ERRORS_TOTAL.load(Ordering::Relaxed));
+                    let _ = writeln!(&mut out, "# HELP phantom_node_consensus_fast_verify_seats_errors_total Consensus fast_verify_seats errors total");
+                    let _ = writeln!(&mut out, "# TYPE phantom_node_consensus_fast_verify_seats_errors_total counter");
+                    let _ = writeln!(&mut out, "phantom_node_consensus_fast_verify_seats_errors_total {}", NODE_CONSENSUS_FAST_VERIFY_SEATS_ERRORS_TOTAL.load(Ordering::Relaxed));
+                    let _ = writeln!(&mut out, "# HELP phantom_node_consensus_payout_root_errors_total Consensus payout_root errors total");
+                    let _ = writeln!(&mut out, "# TYPE phantom_node_consensus_payout_root_errors_total counter");
+                    let _ = writeln!(&mut out, "phantom_node_consensus_payout_root_errors_total {}", NODE_CONSENSUS_PAYOUT_ROOT_ERRORS_TOTAL.load(Ordering::Relaxed));
+                    let _ = writeln!(&mut out, "# HELP phantom_node_consensus_payout_proof_errors_total Consensus payout_proof errors total");
+                    let _ = writeln!(&mut out, "# TYPE phantom_node_consensus_payout_proof_errors_total counter");
+                    let _ = writeln!(&mut out, "phantom_node_consensus_payout_proof_errors_total {}", NODE_CONSENSUS_PAYOUT_PROOF_ERRORS_TOTAL.load(Ordering::Relaxed));
+
                     // Genesis-/Netzwerk-Metriken
                     // pc_network_id{network="<name>"} 1, pc_genesis_height 0 (falls Genesis vorhanden)
                     let p = std::path::Path::new(&mempool_dir).join("genesis_note.bin");
@@ -402,6 +537,11 @@ fn run_status_serve(args: &StatusServeArgs) -> Result<()> {
                     }
                     let mut resp = Response::builder().status(200).body(Body::from(out)).unwrap();
                     resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("text/plain; version=0.0.4"));
+                    return Ok::<_, anyhow::Error>(resp);
+                } else if req.uri().path().starts_with("/consensus/") && consensus_tls_only {
+                    // Wenn mTLS (tls_client_ca) aktiv ist, blocke Konsensus-Endpoints auf Plain-HTTP
+                    let mut resp = Response::builder().status(403).body(Body::from("{\"ok\":false,\"error\":\"mtls_required\"}".to_string())).unwrap();
+                    resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json"));
                     return Ok::<_, anyhow::Error>(resp);
                 } else if req.uri().path() == "/genesis/bootstrap" && req.method() == hyper::Method::POST {
                     // Bootstrap: Lade genesis_note.bin, baue V2-Payload/Header und validiere A0
@@ -487,6 +627,7 @@ let whole = match whole_pre { Ok(b)=>b, Err(e)=> { let mut resp=Response::builde
 if whole.len() > MAX_HTTP_BODY_BYTES {
     let mut resp = Response::builder().status(413).body(Body::from("{\"ok\":false,\"error\":\"body too large\"}".to_string())).unwrap();
     resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json"));
+    NODE_CONSENSUS_SELECT_COMMITTEE_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed);
     return Ok::<_, anyhow::Error>(resp);
 }
                     let reqv: ApplyMintReq = match serde_json::from_slice(&whole) { Ok(v)=>v, Err(e)=> { let mut resp=Response::builder().status(400).body(Body::from(format!("{{\"ok\":false,\"error\":\"bad json: {}\"}}", e))).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); return Ok::<_, anyhow::Error>(resp);} };
@@ -850,6 +991,21 @@ if whole.len() > MAX_HTTP_BODY_BYTES {
                     resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json"));
                     return Ok::<_, anyhow::Error>(resp);
                 } else if req.uri().path() == "/consensus/select_committee" && req.method() == hyper::Method::POST {
+                    NODE_CONSENSUS_SELECT_COMMITTEE_TOTAL.fetch_add(1, Ordering::Relaxed);
+                    if let Some(r) = rl_sc.as_ref() {
+                        if !rate_allow(r).await {
+                            NODE_CONSENSUS_SELECT_COMMITTEE_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed);
+                            let mut resp = Response::builder().status(429).body(Body::from("{\"ok\":false,\"error\":\"rate limited\"}".to_string())).unwrap();
+                            resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json"));
+                            return Ok::<_, anyhow::Error>(resp);
+                        }
+                    }
+                    if require_auth {
+                        let expected = auth_token.as_deref().unwrap_or("");
+                        let got = req.headers().get(hyper::header::AUTHORIZATION);
+                        let ok = if let Some(val) = got { if let Ok(s) = val.to_str() { if let Some(b) = s.strip_prefix("Bearer ") { !expected.is_empty() && b == expected } else { false } } else { false } } else { false };
+                        if !ok { let mut resp = Response::builder().status(401).body(Body::from("{\"ok\":false,\"error\":\"unauthorized\"}".to_string())).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); NODE_CONSENSUS_SELECT_COMMITTEE_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed); return Ok::<_, anyhow::Error>(resp); }
+                    }
                     #[derive(serde::Deserialize)]
                     struct ReqRotationCfg { cooldown_anchors: u64, min_attendance_pct: u8 }
                     #[derive(serde::Deserialize)]
@@ -872,21 +1028,21 @@ if whole.len() > MAX_HTTP_BODY_BYTES {
         return Ok::<_, anyhow::Error>(resp);
     }
 };
-let whole = match whole_pre { Ok(b)=>b, Err(e)=> { let mut resp=Response::builder().status(400).body(Body::from(format!("{{\"ok\":false,\"error\":\"read body: {}\"}}", e))).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); return Ok::<_, anyhow::Error>(resp);} };
+let whole = match whole_pre { Ok(b)=>b, Err(e)=> { let mut resp=Response::builder().status(400).body(Body::from(format!("{{\"ok\":false,\"error\":\"read body: {}\"}}", e))).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); NODE_CONSENSUS_SELECT_COMMITTEE_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed); return Ok::<_, anyhow::Error>(resp);} };
 if whole.len() > MAX_HTTP_BODY_BYTES {
     let mut resp = Response::builder().status(413).body(Body::from("{\"ok\":false,\"error\":\"body too large\"}".to_string())).unwrap();
     resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json"));
-    return Ok::<_, anyhow::Error>(resp);
+    NODE_CONSENSUS_SELECT_COMMITTEE_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed); return Ok::<_, anyhow::Error>(resp);
 }
-                    let reqv: SelectReq = match serde_json::from_slice(&whole) { Ok(v)=>v, Err(e)=> { let mut resp=Response::builder().status(400).body(Body::from(format!("{{\"ok\":false,\"error\":\"bad json: {}\"}}", e))).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); return Ok::<_, anyhow::Error>(resp);} };
+                    let reqv: SelectReq = match serde_json::from_slice(&whole) { Ok(v)=>v, Err(e)=> { let mut resp=Response::builder().status(400).body(Body::from(format!("{{\"ok\":false,\"error\":\"bad json: {}\"}}", e))).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); NODE_CONSENSUS_SELECT_COMMITTEE_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed); return Ok::<_, anyhow::Error>(resp);} };
 
                     // Decode helpers
                     fn hex32(s: &str) -> Option<[u8;32]> { let mut out=[0u8;32]; if s.len()!=64 { return None; } let raw=hex::decode(s).ok()?; if raw.len()!=32 { return None; } out.copy_from_slice(&raw); Some(out) }
                     fn hex48(s: &str) -> Option<[u8;48]> { let mut out=[0u8;48]; if s.len()!=96 { return None; } let raw=hex::decode(s).ok()?; if raw.len()!=48 { return None; } out.copy_from_slice(&raw); Some(out) }
                     fn hex96(s: &str) -> Option<[u8;96]> { let mut out=[0u8;96]; if s.len()!=192 { return None; } let raw=hex::decode(s).ok()?; if raw.len()!=96 { return None; } out.copy_from_slice(&raw); Some(out) }
 
-                    let nid = match hex32(&reqv.network_id) { Some(v)=>v, None=> { let mut resp=Response::builder().status(400).body(Body::from("{\"ok\":false,\"error\":\"bad network_id\"}".to_string())).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); return Ok::<_, anyhow::Error>(resp);} };
-                    let last = match hex32(&reqv.last_anchor_id) { Some(v)=>v, None=> { let mut resp=Response::builder().status(400).body(Body::from("{\"ok\":false,\"error\":\"bad last_anchor_id\"}".to_string())).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); return Ok::<_, anyhow::Error>(resp);} };
+                    let nid = match hex32(&reqv.network_id) { Some(v)=>v, None=> { let mut resp=Response::builder().status(400).body(Body::from("{\"ok\":false,\"error\":\"bad network_id\"}".to_string())).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); NODE_CONSENSUS_SELECT_COMMITTEE_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed); return Ok::<_, anyhow::Error>(resp);} };
+                    let last = match hex32(&reqv.last_anchor_id) { Some(v)=>v, None=> { let mut resp=Response::builder().status(400).body(Body::from("{\"ok\":false,\"error\":\"bad last_anchor_id\"}".to_string())).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); NODE_CONSENSUS_SELECT_COMMITTEE_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed); return Ok::<_, anyhow::Error>(resp);} };
                     let epoch_len = if reqv.epoch_len != 0 { reqv.epoch_len } else { node_rot_cfg.as_ref().and_then(|r| r.epoch_len).unwrap_or(10_000) };
                     let epoch = derive_epoch(reqv.current_anchor_index, epoch_len);
                     let seed = derive_vrf_seed(nid, pc_types::AnchorId(last));
@@ -903,11 +1059,11 @@ if whole.len() > MAX_HTTP_BODY_BYTES {
 
                     let mut cands: Vec<VrfCandidate> = Vec::with_capacity(reqv.candidates.len());
                     for c in reqv.candidates.iter() {
-                        let rid = match hex32(&c.recipient_id) { Some(v)=>v, None=> { let mut resp=Response::builder().status(400).body(Body::from("{\"ok\":false,\"error\":\"bad recipient_id\"}".to_string())).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); return Ok::<_, anyhow::Error>(resp);} };
-                        let oid = match hex32(&c.operator_id) { Some(v)=>v, None=> { let mut resp=Response::builder().status(400).body(Body::from("{\"ok\":false,\"error\":\"bad operator_id\"}".to_string())).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); return Ok::<_, anyhow::Error>(resp);} };
-                        let pkb = match hex48(&c.bls_pk) { Some(v)=>v, None=> { let mut resp=Response::builder().status(400).body(Body::from("{\"ok\":false,\"error\":\"bad bls_pk\"}".to_string())).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); return Ok::<_, anyhow::Error>(resp);} };
-                        let proof = match hex96(&c.vrf_proof) { Some(v)=>v, None=> { let mut resp=Response::builder().status(400).body(Body::from("{\"ok\":false,\"error\":\"bad vrf_proof\"}".to_string())).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); return Ok::<_, anyhow::Error>(resp);} };
-                        let pk = match bls_pk_from_bytes(&pkb) { Some(p)=>p, None=> { let mut resp=Response::builder().status(400).body(Body::from("{\"ok\":false,\"error\":\"invalid bls_pk\"}".to_string())).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); return Ok::<_, anyhow::Error>(resp);} };
+                        let rid = match hex32(&c.recipient_id) { Some(v)=>v, None=> { let mut resp=Response::builder().status(400).body(Body::from("{\"ok\":false,\"error\":\"bad recipient_id\"}".to_string())).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); NODE_CONSENSUS_SELECT_COMMITTEE_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed); return Ok::<_, anyhow::Error>(resp);} };
+                        let oid = match hex32(&c.operator_id) { Some(v)=>v, None=> { let mut resp=Response::builder().status(400).body(Body::from("{\"ok\":false,\"error\":\"bad operator_id\"}".to_string())).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); NODE_CONSENSUS_SELECT_COMMITTEE_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed); return Ok::<_, anyhow::Error>(resp);} };
+                        let pkb = match hex48(&c.bls_pk) { Some(v)=>v, None=> { let mut resp=Response::builder().status(400).body(Body::from("{\"ok\":false,\"error\":\"bad bls_pk\"}".to_string())).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); NODE_CONSENSUS_SELECT_COMMITTEE_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed); return Ok::<_, anyhow::Error>(resp);} };
+                        let proof = match hex96(&c.vrf_proof) { Some(v)=>v, None=> { let mut resp=Response::builder().status(400).body(Body::from("{\"ok\":false,\"error\":\"bad vrf_proof\"}".to_string())).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); NODE_CONSENSUS_SELECT_COMMITTEE_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed); return Ok::<_, anyhow::Error>(resp);} };
+                        let pk = match bls_pk_from_bytes(&pkb) { Some(p)=>p, None=> { let mut resp=Response::builder().status(400).body(Body::from("{\"ok\":false,\"error\":\"invalid bls_pk\"}".to_string())).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); NODE_CONSENSUS_SELECT_COMMITTEE_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed); return Ok::<_, anyhow::Error>(resp);} };
                         cands.push(VrfCandidate{ recipient_id: rid, operator_id: oid, bls_pk: pk, last_selected_at: c.last_selected_at, attendance_recent_pct: c.attendance_recent_pct, vrf_proof: proof });
                     }
 
@@ -928,6 +1084,14 @@ if whole.len() > MAX_HTTP_BODY_BYTES {
                     return Ok::<_, anyhow::Error>(resp);
                 } else if req.uri().path() == "/consensus/select_attestors" && req.method() == hyper::Method::POST {
                     NODE_CONSENSUS_SELECT_ATTESTORS_TOTAL.fetch_add(1, Ordering::Relaxed);
+                    if let Some(r) = rl_sa.as_ref() {
+                        if !rate_allow(r).await {
+                            NODE_CONSENSUS_SELECT_ATTESTORS_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed);
+                            let mut resp = Response::builder().status(429).body(Body::from("{\"ok\":false,\"error\":\"rate limited\"}".to_string())).unwrap();
+                            resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json"));
+                            return Ok::<_, anyhow::Error>(resp);
+                        }
+                    }
                     if require_auth {
                         let expected = auth_token.as_deref().unwrap_or("");
                         let got = req.headers().get(hyper::header::AUTHORIZATION);
@@ -941,6 +1105,7 @@ if whole.len() > MAX_HTTP_BODY_BYTES {
                         if !ok {
                             let mut resp = Response::builder().status(401).body(Body::from("{\"ok\":false,\"error\":\"unauthorized\"}".to_string())).unwrap();
                             resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json"));
+                            NODE_CONSENSUS_SELECT_ATTESTORS_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed);
                             return Ok::<_, anyhow::Error>(resp);
                         }
                     }
@@ -966,13 +1131,13 @@ if whole.len() > MAX_HTTP_BODY_BYTES {
         return Ok::<_, anyhow::Error>(resp);
     }
 };
-let whole = match whole_pre { Ok(b)=>b, Err(e)=> { let mut resp=Response::builder().status(400).body(Body::from(format!("{{\"ok\":false,\"error\":\"read body: {}\"}}", e))).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); return Ok::<_, anyhow::Error>(resp);} };
+let whole = match whole_pre { Ok(b)=>b, Err(e)=> { let mut resp=Response::builder().status(400).body(Body::from(format!("{{\"ok\":false,\"error\":\"read body: {}\"}}", e))).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); NODE_CONSENSUS_SELECT_ATTESTORS_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed); return Ok::<_, anyhow::Error>(resp);} };
 if whole.len() > MAX_HTTP_BODY_BYTES {
     let mut resp = Response::builder().status(413).body(Body::from("{\"ok\":false,\"error\":\"body too large\"}".to_string())).unwrap();
     resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json"));
-    return Ok::<_, anyhow::Error>(resp);
+    NODE_CONSENSUS_SELECT_ATTESTORS_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed); return Ok::<_, anyhow::Error>(resp);
 }
-                    let reqv: SelectReq = match serde_json::from_slice(&whole) { Ok(v)=>v, Err(e)=> { let mut resp=Response::builder().status(400).body(Body::from(format!("{{\"ok\":false,\"error\":\"bad json: {}\"}}", e))).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); return Ok::<_, anyhow::Error>(resp);} };
+                    let reqv: SelectReq = match serde_json::from_slice(&whole) { Ok(v)=>v, Err(e)=> { let mut resp=Response::builder().status(400).body(Body::from(format!("{{\"ok\":false,\"error\":\"bad json: {}\"}}", e))).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); NODE_CONSENSUS_SELECT_ATTESTORS_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed); return Ok::<_, anyhow::Error>(resp);} };
 
                     fn hex32(s: &str) -> Option<[u8;32]> { let mut out=[0u8;32]; if s.len()!=64 { return None; } let raw=hex::decode(s).ok()?; if raw.len()!=32 { return None; } out.copy_from_slice(&raw); Some(out) }
                     fn hex48(s: &str) -> Option<[u8;48]> { let mut out=[0u8;48]; if s.len()!=96 { return None; } let raw=hex::decode(s).ok()?; if raw.len()!=48 { return None; } out.copy_from_slice(&raw); Some(out) }
@@ -1018,6 +1183,14 @@ if whole.len() > MAX_HTTP_BODY_BYTES {
                     return Ok::<_, anyhow::Error>(resp);
                 } else if req.uri().path() == "/consensus/select_attestors_fair" && req.method() == hyper::Method::POST {
                     NODE_CONSENSUS_SELECT_ATTESTORS_FAIR_TOTAL.fetch_add(1, Ordering::Relaxed);
+                    if let Some(r) = rl_saf.as_ref() {
+                        if !rate_allow(r).await {
+                            NODE_CONSENSUS_SELECT_ATTESTORS_FAIR_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed);
+                            let mut resp = Response::builder().status(429).body(Body::from("{\"ok\":false,\"error\":\"rate limited\"}".to_string())).unwrap();
+                            resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json"));
+                            return Ok::<_, anyhow::Error>(resp);
+                        }
+                    }
                     if require_auth {
                         let expected = auth_token.as_deref().unwrap_or("");
                         let got = req.headers().get(hyper::header::AUTHORIZATION);
@@ -1063,13 +1236,13 @@ if whole.len() > MAX_HTTP_BODY_BYTES {
         return Ok::<_, anyhow::Error>(resp);
     }
 };
-let whole = match whole_pre { Ok(b)=>b, Err(e)=> { let mut resp=Response::builder().status(400).body(Body::from(format!("{{\"ok\":false,\"error\":\"read body: {}\"}}", e))).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); return Ok::<_, anyhow::Error>(resp);} };
+let whole = match whole_pre { Ok(b)=>b, Err(e)=> { let mut resp=Response::builder().status(400).body(Body::from(format!("{{\"ok\":false,\"error\":\"read body: {}\"}}", e))).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); NODE_CONSENSUS_SELECT_ATTESTORS_FAIR_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed); return Ok::<_, anyhow::Error>(resp);} };
 if whole.len() > MAX_HTTP_BODY_BYTES {
     let mut resp = Response::builder().status(413).body(Body::from("{\"ok\":false,\"error\":\"body too large\"}".to_string())).unwrap();
     resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json"));
-    return Ok::<_, anyhow::Error>(resp);
+    NODE_CONSENSUS_SELECT_ATTESTORS_FAIR_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed); return Ok::<_, anyhow::Error>(resp);
 }
-                    let reqv: FairReq = match serde_json::from_slice(&whole) { Ok(v)=>v, Err(e)=> { let mut resp=Response::builder().status(400).body(Body::from(format!("{{\"ok\":false,\"error\":\"bad json: {}\"}}", e))).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); return Ok::<_, anyhow::Error>(resp);} };
+                    let reqv: FairReq = match serde_json::from_slice(&whole) { Ok(v)=>v, Err(e)=> { let mut resp=Response::builder().status(400).body(Body::from(format!("{{\"ok\":false,\"error\":\"bad json: {}\"}}", e))).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); NODE_CONSENSUS_SELECT_ATTESTORS_FAIR_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed); return Ok::<_, anyhow::Error>(resp);} };
 
                     fn hex32(s: &str) -> Option<[u8;32]> { let mut out=[0u8;32]; if s.len()!=64 { return None; } let raw=hex::decode(s).ok()?; if raw.len()!=32 { return None; } out.copy_from_slice(&raw); Some(out) }
                     fn hex48(s: &str) -> Option<[u8;48]> { let mut out=[0u8;48]; if s.len()!=96 { return None; } let raw=hex::decode(s).ok()?; if raw.len()!=48 { return None; } out.copy_from_slice(&raw); Some(out) }
@@ -1135,11 +1308,19 @@ if whole.len() > MAX_HTTP_BODY_BYTES {
                     return Ok::<_, anyhow::Error>(resp);
                 } else if req.uri().path() == "/consensus/attestor_payout_root" && req.method() == hyper::Method::POST {
                     NODE_CONSENSUS_PAYOUT_ROOT_TOTAL.fetch_add(1, Ordering::Relaxed);
+                    if let Some(r) = rl_pr.as_ref() {
+                        if !rate_allow(r).await {
+                            NODE_CONSENSUS_PAYOUT_ROOT_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed);
+                            let mut resp = Response::builder().status(429).body(Body::from("{\"ok\":false,\"error\":\"rate limited\"}".to_string())).unwrap();
+                            resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json"));
+                            return Ok::<_, anyhow::Error>(resp);
+                        }
+                    }
                     if require_auth {
                         let expected = auth_token.as_deref().unwrap_or("");
                         let got = req.headers().get(hyper::header::AUTHORIZATION);
                         let ok = if let Some(val) = got { if let Ok(s) = val.to_str() { if let Some(b) = s.strip_prefix("Bearer ") { !expected.is_empty() && b == expected } else { false } } else { false } } else { false };
-                        if !ok { let mut resp = Response::builder().status(401).body(Body::from("{\"ok\":false,\"error\":\"unauthorized\"}".to_string())).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); return Ok::<_, anyhow::Error>(resp); }
+                        if !ok { let mut resp = Response::builder().status(401).body(Body::from("{\"ok\":false,\"error\":\"unauthorized\"}".to_string())).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); NODE_CONSENSUS_PAYOUT_ROOT_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed); return Ok::<_, anyhow::Error>(resp); }
                     }
                     #[derive(serde::Deserialize)]
                     struct FeeParamsIn { p_base_bp: u16, p_prop_bp: u16, p_perf_bp: u16, p_att_bp: u16, d_max: u8, perf_weights: Vec<u32> }
@@ -1155,13 +1336,13 @@ if whole.len() > MAX_HTTP_BODY_BYTES {
         return Ok::<_, anyhow::Error>(resp);
     }
 };
-let whole = match whole_pre { Ok(b)=>b, Err(e)=> { let mut resp=Response::builder().status(400).body(Body::from(format!("{{\"ok\":false,\"error\":\"read body: {}\"}}", e))).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); return Ok::<_, anyhow::Error>(resp);} };
+let whole = match whole_pre { Ok(b)=>b, Err(e)=> { let mut resp=Response::builder().status(400).body(Body::from(format!("{{\"ok\":false,\"error\":\"read body: {}\"}}", e))).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); NODE_CONSENSUS_PAYOUT_ROOT_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed); return Ok::<_, anyhow::Error>(resp);} };
 if whole.len() > MAX_HTTP_BODY_BYTES {
     let mut resp = Response::builder().status(413).body(Body::from("{\"ok\":false,\"error\":\"body too large\"}".to_string())).unwrap();
     resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json"));
-    return Ok::<_, anyhow::Error>(resp);
+    NODE_CONSENSUS_PAYOUT_ROOT_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed); return Ok::<_, anyhow::Error>(resp);
 }
-                    let reqv: RootReq = match serde_json::from_slice(&whole) { Ok(v)=>v, Err(e)=> { let mut resp=Response::builder().status(400).body(Body::from(format!("{{\"ok\":false,\"error\":\"bad json: {}\"}}", e))).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); return Ok::<_, anyhow::Error>(resp);} };
+                    let reqv: RootReq = match serde_json::from_slice(&whole) { Ok(v)=>v, Err(e)=> { let mut resp=Response::builder().status(400).body(Body::from(format!("{{\"ok\":false,\"error\":\"bad json: {}\"}}", e))).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); NODE_CONSENSUS_PAYOUT_ROOT_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed); return Ok::<_, anyhow::Error>(resp);} };
 
                     fn hex32(s: &str) -> Option<[u8;32]> { let mut out=[0u8;32]; if s.len()!=64 { return None; } let raw=hex::decode(s).ok()?; if raw.len()!=32 { return None; } out.copy_from_slice(&raw); Some(out) }
                     let params = if let Some(p)=reqv.fee_params { pc_consensus::FeeSplitParams{ p_base_bp:p.p_base_bp, p_prop_bp:p.p_prop_bp, p_perf_bp:p.p_perf_bp, p_att_bp:p.p_att_bp, d_max:p.d_max, perf_weights:p.perf_weights } } else { pc_consensus::FeeSplitParams::recommended() };
@@ -1177,11 +1358,19 @@ if whole.len() > MAX_HTTP_BODY_BYTES {
                     return Ok::<_, anyhow::Error>(resp);
                 } else if req.uri().path() == "/consensus/attestor_payout_proof" && req.method() == hyper::Method::POST {
                     NODE_CONSENSUS_PAYOUT_PROOF_TOTAL.fetch_add(1, Ordering::Relaxed);
+                    if let Some(r) = rl_pp.as_ref() {
+                        if !rate_allow(r).await {
+                            NODE_CONSENSUS_PAYOUT_PROOF_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed);
+                            let mut resp = Response::builder().status(429).body(Body::from("{\"ok\":false,\"error\":\"rate limited\"}".to_string())).unwrap();
+                            resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json"));
+                            return Ok::<_, anyhow::Error>(resp);
+                        }
+                    }
                     if require_auth {
                         let expected = auth_token.as_deref().unwrap_or("");
                         let got = req.headers().get(hyper::header::AUTHORIZATION);
                         let ok = if let Some(val) = got { if let Ok(s) = val.to_str() { if let Some(b) = s.strip_prefix("Bearer ") { !expected.is_empty() && b == expected } else { false } } else { false } } else { false };
-                        if !ok { let mut resp = Response::builder().status(401).body(Body::from("{\"ok\":false,\"error\":\"unauthorized\"}".to_string())).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); return Ok::<_, anyhow::Error>(resp); }
+                        if !ok { let mut resp = Response::builder().status(401).body(Body::from("{\"ok\":false,\"error\":\"unauthorized\"}".to_string())).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); NODE_CONSENSUS_PAYOUT_PROOF_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed); return Ok::<_, anyhow::Error>(resp); }
                     }
                     #[derive(serde::Deserialize)]
                     struct FeeParamsIn { p_base_bp: u16, p_prop_bp: u16, p_perf_bp: u16, p_att_bp: u16, d_max: u8, perf_weights: Vec<u32> }
@@ -1197,13 +1386,13 @@ if whole.len() > MAX_HTTP_BODY_BYTES {
         return Ok::<_, anyhow::Error>(resp);
     }
 };
-let whole = match whole_pre { Ok(b)=>b, Err(e)=> { let mut resp=Response::builder().status(400).body(Body::from(format!("{{\"ok\":false,\"error\":\"read body: {}\"}}", e))).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); return Ok::<_, anyhow::Error>(resp);} };
+let whole = match whole_pre { Ok(b)=>b, Err(e)=> { let mut resp=Response::builder().status(400).body(Body::from(format!("{{\"ok\":false,\"error\":\"read body: {}\"}}", e))).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); NODE_CONSENSUS_PAYOUT_PROOF_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed); return Ok::<_, anyhow::Error>(resp);} };
 if whole.len() > MAX_HTTP_BODY_BYTES {
     let mut resp = Response::builder().status(413).body(Body::from("{\"ok\":false,\"error\":\"body too large\"}".to_string())).unwrap();
     resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json"));
-    return Ok::<_, anyhow::Error>(resp);
+    NODE_CONSENSUS_PAYOUT_PROOF_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed); return Ok::<_, anyhow::Error>(resp);
 }
-                    let reqv: ProofReq = match serde_json::from_slice(&whole) { Ok(v)=>v, Err(e)=> { let mut resp=Response::builder().status(400).body(Body::from(format!("{{\"ok\":false,\"error\":\"bad json: {}\"}}", e))).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); return Ok::<_, anyhow::Error>(resp);} };
+                    let reqv: ProofReq = match serde_json::from_slice(&whole) { Ok(v)=>v, Err(e)=> { let mut resp=Response::builder().status(400).body(Body::from(format!("{{\"ok\":false,\"error\":\"bad json: {}\"}}", e))).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); NODE_CONSENSUS_PAYOUT_PROOF_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed); return Ok::<_, anyhow::Error>(resp);} };
 
                     fn hex32(s: &str) -> Option<[u8;32]> { let mut out=[0u8;32]; if s.len()!=64 { return None; } let raw=hex::decode(s).ok()?; if raw.len()!=32 { return None; } out.copy_from_slice(&raw); Some(out) }
                     let params = if let Some(p)=reqv.fee_params { pc_consensus::FeeSplitParams{ p_base_bp:p.p_base_bp, p_prop_bp:p.p_prop_bp, p_perf_bp:p.p_perf_bp, p_att_bp:p.p_att_bp, d_max:p.d_max, perf_weights:p.perf_weights } } else { pc_consensus::FeeSplitParams::recommended() };
@@ -1238,11 +1427,19 @@ if whole.len() > MAX_HTTP_BODY_BYTES {
                     return Ok::<_, anyhow::Error>(resp);
                 } else if req.uri().path() == "/consensus/attestor_aggregate_sigs" && req.method() == hyper::Method::POST {
                     NODE_CONSENSUS_AGG_SIGS_TOTAL.fetch_add(1, Ordering::Relaxed);
+                    if let Some(r) = rl_as.as_ref() {
+                        if !rate_allow(r).await {
+                            NODE_CONSENSUS_AGG_SIGS_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed);
+                            let mut resp = Response::builder().status(429).body(Body::from("{\"ok\":false,\"error\":\"rate limited\"}".to_string())).unwrap();
+                            resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json"));
+                            return Ok::<_, anyhow::Error>(resp);
+                        }
+                    }
                     if require_auth {
                         let expected = auth_token.as_deref().unwrap_or("");
                         let got = req.headers().get(hyper::header::AUTHORIZATION);
                         let ok = if let Some(val) = got { if let Ok(s) = val.to_str() { if let Some(b) = s.strip_prefix("Bearer ") { !expected.is_empty() && b == expected } else { false } } else { false } } else { false };
-                        if !ok { let mut resp = Response::builder().status(401).body(Body::from("{\"ok\":false,\"error\":\"unauthorized\"}".to_string())).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); return Ok::<_, anyhow::Error>(resp); }
+                        if !ok { let mut resp = Response::builder().status(401).body(Body::from("{\"ok\":false,\"error\":\"unauthorized\"}".to_string())).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); NODE_CONSENSUS_AGG_SIGS_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed); return Ok::<_, anyhow::Error>(resp); }
                     }
                     #[derive(serde::Deserialize)]
                     struct AggReq { parts: Vec<String> }
@@ -1254,13 +1451,13 @@ if whole.len() > MAX_HTTP_BODY_BYTES {
         return Ok::<_, anyhow::Error>(resp);
     }
 };
-let whole = match whole_pre { Ok(b)=>b, Err(e)=> { let mut resp=Response::builder().status(400).body(Body::from(format!("{{\"ok\":false,\"error\":\"read body: {}\"}}", e))).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); return Ok::<_, anyhow::Error>(resp);} };
+let whole = match whole_pre { Ok(b)=>b, Err(e)=> { let mut resp=Response::builder().status(400).body(Body::from(format!("{{\"ok\":false,\"error\":\"read body: {}\"}}", e))).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); NODE_CONSENSUS_AGG_SIGS_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed); return Ok::<_, anyhow::Error>(resp);} };
 if whole.len() > MAX_HTTP_BODY_BYTES {
     let mut resp = Response::builder().status(413).body(Body::from("{\"ok\":false,\"error\":\"body too large\"}".to_string())).unwrap();
     resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json"));
-    return Ok::<_, anyhow::Error>(resp);
+    NODE_CONSENSUS_AGG_SIGS_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed); return Ok::<_, anyhow::Error>(resp);
 }
-                    let reqv: AggReq = match serde_json::from_slice(&whole) { Ok(v)=>v, Err(e)=> { let mut resp=Response::builder().status(400).body(Body::from(format!("{{\"ok\":false,\"error\":\"bad json: {}\"}}", e))).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); return Ok::<_, anyhow::Error>(resp);} };
+                    let reqv: AggReq = match serde_json::from_slice(&whole) { Ok(v)=>v, Err(e)=> { let mut resp=Response::builder().status(400).body(Body::from(format!("{{\"ok\":false,\"error\":\"bad json: {}\"}}", e))).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); NODE_CONSENSUS_AGG_SIGS_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed); return Ok::<_, anyhow::Error>(resp);} };
                     let mut sigs: Vec<[u8;96]> = Vec::with_capacity(reqv.parts.len());
                     for s in reqv.parts.iter() {
                         if s.len() != 192 { let mut resp=Response::builder().status(400).body(Body::from("{\"ok\":false,\"error\":\"bad sig length\"}".to_string())).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); return Ok::<_, anyhow::Error>(resp); }
@@ -1282,11 +1479,19 @@ if whole.len() > MAX_HTTP_BODY_BYTES {
                     }
                 } else if req.uri().path() == "/consensus/attestor_fast_verify" && req.method() == hyper::Method::POST {
                     NODE_CONSENSUS_FAST_VERIFY_TOTAL.fetch_add(1, Ordering::Relaxed);
+                    if let Some(r) = rl_fv.as_ref() {
+                        if !rate_allow(r).await {
+                            NODE_CONSENSUS_FAST_VERIFY_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed);
+                            let mut resp = Response::builder().status(429).body(Body::from("{\"ok\":false,\"error\":\"rate limited\"}".to_string())).unwrap();
+                            resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json"));
+                            return Ok::<_, anyhow::Error>(resp);
+                        }
+                    }
                     if require_auth {
                         let expected = auth_token.as_deref().unwrap_or("");
                         let got = req.headers().get(hyper::header::AUTHORIZATION);
                         let ok = if let Some(val) = got { if let Ok(s) = val.to_str() { if let Some(b) = s.strip_prefix("Bearer ") { !expected.is_empty() && b == expected } else { false } } else { false } } else { false };
-                        if !ok { let mut resp = Response::builder().status(401).body(Body::from("{\"ok\":false,\"error\":\"unauthorized\"}".to_string())).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); return Ok::<_, anyhow::Error>(resp); }
+                        if !ok { let mut resp = Response::builder().status(401).body(Body::from("{\"ok\":false,\"error\":\"unauthorized\"}".to_string())).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); NODE_CONSENSUS_FAST_VERIFY_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed); return Ok::<_, anyhow::Error>(resp); }
                     }
                     #[derive(serde::Deserialize)]
                     struct VerifyReq { network_id: String, epoch: u64, topic: String, bls_pks: Vec<String>, agg_sig: String }
@@ -1301,13 +1506,13 @@ if whole.len() > MAX_HTTP_BODY_BYTES {
         return Ok::<_, anyhow::Error>(resp);
     }
 };
-let whole = match whole_pre { Ok(b)=>b, Err(e)=> { let mut resp=Response::builder().status(400).body(Body::from(format!("{{\"ok\":false,\"error\":\"read body: {}\"}}", e))).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); return Ok::<_, anyhow::Error>(resp);} };
+let whole = match whole_pre { Ok(b)=>b, Err(e)=> { let mut resp=Response::builder().status(400).body(Body::from(format!("{{\"ok\":false,\"error\":\"read body: {}\"}}", e))).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); NODE_CONSENSUS_FAST_VERIFY_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed); return Ok::<_, anyhow::Error>(resp);} };
 if whole.len() > MAX_HTTP_BODY_BYTES {
     let mut resp = Response::builder().status(413).body(Body::from("{\"ok\":false,\"error\":\"body too large\"}".to_string())).unwrap();
     resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json"));
-    return Ok::<_, anyhow::Error>(resp);
+    NODE_CONSENSUS_FAST_VERIFY_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed); return Ok::<_, anyhow::Error>(resp);
 }
-                    let reqv: VerifyReq = match serde_json::from_slice(&whole) { Ok(v)=>v, Err(e)=> { let mut resp=Response::builder().status(400).body(Body::from(format!("{{\"ok\":false,\"error\":\"bad json: {}\"}}", e))).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); return Ok::<_, anyhow::Error>(resp);} };
+                    let reqv: VerifyReq = match serde_json::from_slice(&whole) { Ok(v)=>v, Err(e)=> { let mut resp=Response::builder().status(400).body(Body::from(format!("{{\"ok\":false,\"error\":\"bad json: {}\"}}", e))).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); NODE_CONSENSUS_FAST_VERIFY_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed); return Ok::<_, anyhow::Error>(resp);} };
                     let nid = match hex32(&reqv.network_id) { Some(v)=>v, None=> { let mut resp=Response::builder().status(400).body(Body::from("{\"ok\":false,\"error\":\"bad network_id\"}".to_string())).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); return Ok::<_, anyhow::Error>(resp); } };
                     let topic_bytes = match hex::decode(&reqv.topic) { Ok(v)=>v, Err(_)=> { let mut resp=Response::builder().status(400).body(Body::from("{\"ok\":false,\"error\":\"bad topic hex\"}".to_string())).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); return Ok::<_, anyhow::Error>(resp);} };
                     let msg = attestation_message(&nid, reqv.epoch, &topic_bytes);
@@ -1326,11 +1531,19 @@ if whole.len() > MAX_HTTP_BODY_BYTES {
                     return Ok::<_, anyhow::Error>(resp);
                 } else if req.uri().path() == "/consensus/attestor_fast_verify_seats" && req.method() == hyper::Method::POST {
                     NODE_CONSENSUS_FAST_VERIFY_SEATS_TOTAL.fetch_add(1, Ordering::Relaxed);
+                    if let Some(r) = rl_fvs.as_ref() {
+                        if !rate_allow(r).await {
+                            NODE_CONSENSUS_FAST_VERIFY_SEATS_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed);
+                            let mut resp = Response::builder().status(429).body(Body::from("{\"ok\":false,\"error\":\"rate limited\"}".to_string())).unwrap();
+                            resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json"));
+                            return Ok::<_, anyhow::Error>(resp);
+                        }
+                    }
                     if require_auth {
                         let expected = auth_token.as_deref().unwrap_or("");
                         let got = req.headers().get(hyper::header::AUTHORIZATION);
                         let ok = if let Some(val) = got { if let Ok(s) = val.to_str() { if let Some(b) = s.strip_prefix("Bearer ") { !expected.is_empty() && b == expected } else { false } } else { false } } else { false };
-                        if !ok { let mut resp = Response::builder().status(401).body(Body::from("{\"ok\":false,\"error\":\"unauthorized\"}".to_string())).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); return Ok::<_, anyhow::Error>(resp); }
+                        if !ok { let mut resp = Response::builder().status(401).body(Body::from("{\"ok\":false,\"error\":\"unauthorized\"}".to_string())).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); NODE_CONSENSUS_FAST_VERIFY_SEATS_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed); return Ok::<_, anyhow::Error>(resp); }
                     }
                     #[derive(serde::Deserialize)]
                     struct SeatIn { bls_pk: String }
@@ -1347,13 +1560,13 @@ if whole.len() > MAX_HTTP_BODY_BYTES {
         return Ok::<_, anyhow::Error>(resp);
     }
 };
-let whole = match whole_pre { Ok(b)=>b, Err(e)=> { let mut resp=Response::builder().status(400).body(Body::from(format!("{{\"ok\":false,\"error\":\"read body: {}\"}}", e))).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); return Ok::<_, anyhow::Error>(resp);} };
+let whole = match whole_pre { Ok(b)=>b, Err(e)=> { let mut resp=Response::builder().status(400).body(Body::from(format!("{{\"ok\":false,\"error\":\"read body: {}\"}}", e))).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); NODE_CONSENSUS_FAST_VERIFY_SEATS_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed); return Ok::<_, anyhow::Error>(resp);} };
 if whole.len() > MAX_HTTP_BODY_BYTES {
     let mut resp = Response::builder().status(413).body(Body::from("{\"ok\":false,\"error\":\"body too large\"}".to_string())).unwrap();
     resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json"));
-    return Ok::<_, anyhow::Error>(resp);
+    NODE_CONSENSUS_FAST_VERIFY_SEATS_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed); return Ok::<_, anyhow::Error>(resp);
 }
-                    let reqv: VerifySeatsReq = match serde_json::from_slice(&whole) { Ok(v)=>v, Err(e)=> { let mut resp=Response::builder().status(400).body(Body::from(format!("{{\"ok\":false,\"error\":\"bad json: {}\"}}", e))).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); return Ok::<_, anyhow::Error>(resp);} };
+                    let reqv: VerifySeatsReq = match serde_json::from_slice(&whole) { Ok(v)=>v, Err(e)=> { let mut resp=Response::builder().status(400).body(Body::from(format!("{{\"ok\":false,\"error\":\"bad json: {}\"}}", e))).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); NODE_CONSENSUS_FAST_VERIFY_SEATS_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed); return Ok::<_, anyhow::Error>(resp);} };
                     let nid = match hex32(&reqv.network_id) { Some(v)=>v, None=> { let mut resp=Response::builder().status(400).body(Body::from("{\"ok\":false,\"error\":\"bad network_id\"}".to_string())).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); return Ok::<_, anyhow::Error>(resp); } };
                     let topic_bytes = match hex::decode(&reqv.topic) { Ok(v)=>v, Err(_)=> { let mut resp=Response::builder().status(400).body(Body::from("{\"ok\":false,\"error\":\"bad topic hex\"}".to_string())).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); return Ok::<_, anyhow::Error>(resp);} };
                     let msg = attestation_message(&nid, reqv.epoch, &topic_bytes);
@@ -1370,6 +1583,15 @@ if whole.len() > MAX_HTTP_BODY_BYTES {
                     resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json"));
                     return Ok::<_, anyhow::Error>(resp);
                 } else if req.uri().path() == "/consensus/select_committee_persist" && req.method() == hyper::Method::POST {
+                    NODE_CONSENSUS_SELECT_COMMITTEE_PERSIST_TOTAL.fetch_add(1, Ordering::Relaxed);
+                    if let Some(r) = rl_scp.as_ref() {
+                        if !rate_allow(r).await {
+                            NODE_CONSENSUS_SELECT_COMMITTEE_PERSIST_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed);
+                            let mut resp = Response::builder().status(429).body(Body::from("{\"ok\":false,\"error\":\"rate limited\"}".to_string())).unwrap();
+                            resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json"));
+                            return Ok::<_, anyhow::Error>(resp);
+                        }
+                    }
                     if require_auth {
                         let expected = auth_token.as_deref().unwrap_or("");
                         let got = req.headers().get(hyper::header::AUTHORIZATION);
@@ -1383,6 +1605,7 @@ if whole.len() > MAX_HTTP_BODY_BYTES {
                         if !ok {
                             let mut resp = Response::builder().status(401).body(Body::from("{\"ok\":false,\"error\":\"unauthorized\"}".to_string())).unwrap();
                             resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json"));
+                            NODE_CONSENSUS_SELECT_COMMITTEE_PERSIST_ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed);
                             return Ok::<_, anyhow::Error>(resp);
                         }
                     }
@@ -1703,6 +1926,70 @@ if whole.len() > MAX_HTTP_BODY_BYTES {
                                         let _ = writeln!(&mut out, "# HELP phantom_node_rpc_broadcast_errors_total RPC broadcast errors total");
                                         let _ = writeln!(&mut out, "# TYPE phantom_node_rpc_broadcast_errors_total counter");
                                         let _ = writeln!(&mut out, "phantom_node_rpc_broadcast_errors_total {}", NODE_RPC_BROADCAST_ERRORS_TOTAL.load(Ordering::Relaxed));
+
+                                        // Consensus Totals
+                                        let _ = writeln!(&mut out, "# HELP phantom_node_consensus_select_committee_total Consensus select_committee requests total");
+                                        let _ = writeln!(&mut out, "# TYPE phantom_node_consensus_select_committee_total counter");
+                                        let _ = writeln!(&mut out, "phantom_node_consensus_select_committee_total {}", NODE_CONSENSUS_SELECT_COMMITTEE_TOTAL.load(Ordering::Relaxed));
+                                        let _ = writeln!(&mut out, "# HELP phantom_node_consensus_select_committee_persist_total Consensus select_committee_persist requests total");
+                                        let _ = writeln!(&mut out, "# TYPE phantom_node_consensus_select_committee_persist_total counter");
+                                        let _ = writeln!(&mut out, "phantom_node_consensus_select_committee_persist_total {}", NODE_CONSENSUS_SELECT_COMMITTEE_PERSIST_TOTAL.load(Ordering::Relaxed));
+                                        let _ = writeln!(&mut out, "# HELP phantom_node_consensus_select_attestors_total Consensus select_attestors requests total");
+                                        let _ = writeln!(&mut out, "# TYPE phantom_node_consensus_select_attestors_total counter");
+                                        let _ = writeln!(&mut out, "phantom_node_consensus_select_attestors_total {}", NODE_CONSENSUS_SELECT_ATTESTORS_TOTAL.load(Ordering::Relaxed));
+                                        let _ = writeln!(&mut out, "# HELP phantom_node_consensus_select_attestors_fair_total Consensus select_attestors_fair requests total");
+                                        let _ = writeln!(&mut out, "# TYPE phantom_node_consensus_select_attestors_fair_total counter");
+                                        let _ = writeln!(&mut out, "phantom_node_consensus_select_attestors_fair_total {}", NODE_CONSENSUS_SELECT_ATTESTORS_FAIR_TOTAL.load(Ordering::Relaxed));
+                                        let _ = writeln!(&mut out, "# HELP phantom_node_consensus_agg_sigs_total Consensus attestor_aggregate_sigs requests total");
+                                        let _ = writeln!(&mut out, "# TYPE phantom_node_consensus_agg_sigs_total counter");
+                                        let _ = writeln!(&mut out, "phantom_node_consensus_agg_sigs_total {}", NODE_CONSENSUS_AGG_SIGS_TOTAL.load(Ordering::Relaxed));
+                                        let _ = writeln!(&mut out, "# HELP phantom_node_consensus_fast_verify_total Consensus fast_verify requests total");
+                                        let _ = writeln!(&mut out, "# TYPE phantom_node_consensus_fast_verify_total counter");
+                                        let _ = writeln!(&mut out, "phantom_node_consensus_fast_verify_total {}", NODE_CONSENSUS_FAST_VERIFY_TOTAL.load(Ordering::Relaxed));
+                                        let _ = writeln!(&mut out, "# HELP phantom_node_consensus_fast_verify_valid_total Consensus fast_verify valid results total");
+                                        let _ = writeln!(&mut out, "# TYPE phantom_node_consensus_fast_verify_valid_total counter");
+                                        let _ = writeln!(&mut out, "phantom_node_consensus_fast_verify_valid_total {}", NODE_CONSENSUS_FAST_VERIFY_VALID_TOTAL.load(Ordering::Relaxed));
+                                        let _ = writeln!(&mut out, "# HELP phantom_node_consensus_fast_verify_seats_total Consensus fast_verify_seats requests total");
+                                        let _ = writeln!(&mut out, "# TYPE phantom_node_consensus_fast_verify_seats_total counter");
+                                        let _ = writeln!(&mut out, "phantom_node_consensus_fast_verify_seats_total {}", NODE_CONSENSUS_FAST_VERIFY_SEATS_TOTAL.load(Ordering::Relaxed));
+                                        let _ = writeln!(&mut out, "# HELP phantom_node_consensus_fast_verify_seats_valid_total Consensus fast_verify_seats valid results total");
+                                        let _ = writeln!(&mut out, "# TYPE phantom_node_consensus_fast_verify_seats_valid_total counter");
+                                        let _ = writeln!(&mut out, "phantom_node_consensus_fast_verify_seats_valid_total {}", NODE_CONSENSUS_FAST_VERIFY_SEATS_VALID_TOTAL.load(Ordering::Relaxed));
+                                        let _ = writeln!(&mut out, "# HELP phantom_node_consensus_payout_root_total Consensus payout_root requests total");
+                                        let _ = writeln!(&mut out, "# TYPE phantom_node_consensus_payout_root_total counter");
+                                        let _ = writeln!(&mut out, "phantom_node_consensus_payout_root_total {}", NODE_CONSENSUS_PAYOUT_ROOT_TOTAL.load(Ordering::Relaxed));
+                                        let _ = writeln!(&mut out, "# HELP phantom_node_consensus_payout_proof_total Consensus payout_proof requests total");
+                                        let _ = writeln!(&mut out, "# TYPE phantom_node_consensus_payout_proof_total counter");
+                                        let _ = writeln!(&mut out, "phantom_node_consensus_payout_proof_total {}", NODE_CONSENSUS_PAYOUT_PROOF_TOTAL.load(Ordering::Relaxed));
+
+                                        // Error counters
+                                        let _ = writeln!(&mut out, "# HELP phantom_node_consensus_select_committee_errors_total Consensus select_committee errors total");
+                                        let _ = writeln!(&mut out, "# TYPE phantom_node_consensus_select_committee_errors_total counter");
+                                        let _ = writeln!(&mut out, "phantom_node_consensus_select_committee_errors_total {}", NODE_CONSENSUS_SELECT_COMMITTEE_ERRORS_TOTAL.load(Ordering::Relaxed));
+                                        let _ = writeln!(&mut out, "# HELP phantom_node_consensus_select_committee_persist_errors_total Consensus select_committee_persist errors total");
+                                        let _ = writeln!(&mut out, "# TYPE phantom_node_consensus_select_committee_persist_errors_total counter");
+                                        let _ = writeln!(&mut out, "phantom_node_consensus_select_committee_persist_errors_total {}", NODE_CONSENSUS_SELECT_COMMITTEE_PERSIST_ERRORS_TOTAL.load(Ordering::Relaxed));
+                                        let _ = writeln!(&mut out, "# HELP phantom_node_consensus_select_attestors_errors_total Consensus select_attestors errors total");
+                                        let _ = writeln!(&mut out, "# TYPE phantom_node_consensus_select_attestors_errors_total counter");
+                                        let _ = writeln!(&mut out, "phantom_node_consensus_select_attestors_errors_total {}", NODE_CONSENSUS_SELECT_ATTESTORS_ERRORS_TOTAL.load(Ordering::Relaxed));
+                                        let _ = writeln!(&mut out, "# HELP phantom_node_consensus_select_attestors_fair_errors_total Consensus select_attestors_fair errors total");
+                                        let _ = writeln!(&mut out, "# TYPE phantom_node_consensus_select_attestors_fair_errors_total counter");
+                                        let _ = writeln!(&mut out, "phantom_node_consensus_select_attestors_fair_errors_total {}", NODE_CONSENSUS_SELECT_ATTESTORS_FAIR_ERRORS_TOTAL.load(Ordering::Relaxed));
+                                        let _ = writeln!(&mut out, "# HELP phantom_node_consensus_agg_sigs_errors_total Consensus attestor_aggregate_sigs errors total");
+                                        let _ = writeln!(&mut out, "# TYPE phantom_node_consensus_agg_sigs_errors_total counter");
+                                        let _ = writeln!(&mut out, "phantom_node_consensus_agg_sigs_errors_total {}", NODE_CONSENSUS_AGG_SIGS_ERRORS_TOTAL.load(Ordering::Relaxed));
+                                        let _ = writeln!(&mut out, "# HELP phantom_node_consensus_fast_verify_errors_total Consensus fast_verify errors total");
+                                        let _ = writeln!(&mut out, "# TYPE phantom_node_consensus_fast_verify_errors_total counter");
+                                        let _ = writeln!(&mut out, "phantom_node_consensus_fast_verify_errors_total {}", NODE_CONSENSUS_FAST_VERIFY_ERRORS_TOTAL.load(Ordering::Relaxed));
+                                        let _ = writeln!(&mut out, "# HELP phantom_node_consensus_fast_verify_seats_errors_total Consensus fast_verify_seats errors total");
+                                        let _ = writeln!(&mut out, "# TYPE phantom_node_consensus_fast_verify_seats_errors_total counter");
+                                        let _ = writeln!(&mut out, "phantom_node_consensus_fast_verify_seats_errors_total {}", NODE_CONSENSUS_FAST_VERIFY_SEATS_ERRORS_TOTAL.load(Ordering::Relaxed));
+                                        let _ = writeln!(&mut out, "# HELP phantom_node_consensus_payout_root_errors_total Consensus payout_root errors total");
+                                        let _ = writeln!(&mut out, "# TYPE phantom_node_consensus_payout_root_errors_total counter");
+                                        let _ = writeln!(&mut out, "phantom_node_consensus_payout_root_errors_total {}", NODE_CONSENSUS_PAYOUT_ROOT_ERRORS_TOTAL.load(Ordering::Relaxed));
+                                        let _ = writeln!(&mut out, "# HELP phantom_node_consensus_payout_proof_errors_total Consensus payout_proof errors total");
+                                        let _ = writeln!(&mut out, "# TYPE phantom_node_consensus_payout_proof_errors_total counter");
+                                        let _ = writeln!(&mut out, "phantom_node_consensus_payout_proof_errors_total {}", NODE_CONSENSUS_PAYOUT_PROOF_ERRORS_TOTAL.load(Ordering::Relaxed));
 
                                         // Consensus Endpoints (TLS)
                                         let _ = writeln!(&mut out, "# HELP phantom_node_consensus_select_attestors_total Consensus select_attestors requests total");
@@ -2459,6 +2746,21 @@ static NODE_CONSENSUS_FAST_VERIFY_SEATS_TOTAL: AtomicU64 = AtomicU64::new(0);
 static NODE_CONSENSUS_FAST_VERIFY_SEATS_VALID_TOTAL: AtomicU64 = AtomicU64::new(0);
 static NODE_CONSENSUS_PAYOUT_ROOT_TOTAL: AtomicU64 = AtomicU64::new(0);
 static NODE_CONSENSUS_PAYOUT_PROOF_TOTAL: AtomicU64 = AtomicU64::new(0);
+
+// Additional request counters
+static NODE_CONSENSUS_SELECT_COMMITTEE_TOTAL: AtomicU64 = AtomicU64::new(0);
+static NODE_CONSENSUS_SELECT_COMMITTEE_PERSIST_TOTAL: AtomicU64 = AtomicU64::new(0);
+
+// Error counters per endpoint
+static NODE_CONSENSUS_SELECT_COMMITTEE_ERRORS_TOTAL: AtomicU64 = AtomicU64::new(0);
+static NODE_CONSENSUS_SELECT_COMMITTEE_PERSIST_ERRORS_TOTAL: AtomicU64 = AtomicU64::new(0);
+static NODE_CONSENSUS_SELECT_ATTESTORS_ERRORS_TOTAL: AtomicU64 = AtomicU64::new(0);
+static NODE_CONSENSUS_SELECT_ATTESTORS_FAIR_ERRORS_TOTAL: AtomicU64 = AtomicU64::new(0);
+static NODE_CONSENSUS_AGG_SIGS_ERRORS_TOTAL: AtomicU64 = AtomicU64::new(0);
+static NODE_CONSENSUS_FAST_VERIFY_ERRORS_TOTAL: AtomicU64 = AtomicU64::new(0);
+static NODE_CONSENSUS_FAST_VERIFY_SEATS_ERRORS_TOTAL: AtomicU64 = AtomicU64::new(0);
+static NODE_CONSENSUS_PAYOUT_ROOT_ERRORS_TOTAL: AtomicU64 = AtomicU64::new(0);
+static NODE_CONSENSUS_PAYOUT_PROOF_ERRORS_TOTAL: AtomicU64 = AtomicU64::new(0);
 
 // Disk-Read Latenz (Header/Payload) als Histogramm (Buckets analog P2P: 1ms,5ms,10ms,50ms,100ms,500ms,+Inf)
 static NODE_STORE_HDR_READ_COUNT: AtomicU64 = AtomicU64::new(0);

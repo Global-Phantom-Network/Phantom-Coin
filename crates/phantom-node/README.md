@@ -107,6 +107,34 @@ curl -sS -X POST \
   http://127.0.0.1:8080/consensus/attestor_fast_verify_seats
 ```
 
+## Rate Limiting
+
+- Optional über `[http_rate]` in der Node‑Config steuerbar (pro Endpoint Token‑Bucket).
+- Felder pro Regel:
+  - `capacity`: maximale Token im Bucket.
+  - `refill_per_sec`: Auffüllrate pro Sekunde.
+- Verhalten:
+  - Bei überschrittenem Limit Antwort `429` mit `{ "ok": false, "error": "rate limited" }`.
+  - In Prometheus unter `/metrics` werden Totals und Fehlerzähler pro Endpoint exponiert, z. B. `phantom_node_consensus_select_committee_total` und `phantom_node_consensus_select_committee_errors_total`.
+  - Auth (falls `--require-auth`/`auth_token` aktiv): fehlendes/invalides Bearer‑Token führt zu `401` und erhöht den jeweiligen Fehlerzähler.
+- mTLS‑Policy:
+  - Wenn `tls_client_ca` gesetzt ist, werden alle Pfade unter `/consensus/*` auf Plain‑HTTP geblockt (`403` mit `{ "ok": false, "error": "mtls_required" }`). Diese Endpoints sind dann nur via TLS+mTLS erreichbar.
+
+Beispiel `node.toml` Ausschnitt:
+
+```toml
+[http_rate]
+select_committee = { capacity = 10, refill_per_sec = 5 }
+select_committee_persist = { capacity = 5, refill_per_sec = 2 }
+select_attestors = { capacity = 20, refill_per_sec = 10 }
+select_attestors_fair = { capacity = 20, refill_per_sec = 10 }
+attestor_payout_root = { capacity = 10, refill_per_sec = 5 }
+attestor_payout_proof = { capacity = 10, refill_per_sec = 5 }
+attestor_aggregate_sigs = { capacity = 30, refill_per_sec = 15 }
+attestor_fast_verify = { capacity = 30, refill_per_sec = 15 }
+attestor_fast_verify_seats = { capacity = 30, refill_per_sec = 15 }
+```
+
 - POST `/consensus/attestor_aggregate_sigs` (Content-Type: `application/json`)
   - Zweck: Aggregiert mehrere BLS‑Signaturen (G2) für dieselbe Nachricht.
   - Request:
