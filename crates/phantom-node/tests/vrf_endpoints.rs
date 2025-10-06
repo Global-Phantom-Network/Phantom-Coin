@@ -16,6 +16,128 @@ fn unique_tmp(prefix: &str) -> std::path::PathBuf {
     std::env::temp_dir().join(format!("pc_vrf_e2e_{}_{}", prefix, nanos))
 }
 
+#[tokio::test]
+#[ignore]
+async fn vrf_attestor_endpoints_e2e() {
+    use pc_crypto::{blake3_32, bls_keygen_from_ikm, bls_vrf_prove};
+    use pc_consensus::committee_vrf::{derive_epoch, derive_vrf_seed};
+
+    // 1) Temp-Mempool-Verzeichnis
+    let base = unique_tmp("vrf_att_e2e");
+    let mempool_dir = base.join("mempool");
+    std::fs::create_dir_all(&mempool_dir).expect("create mempool dir");
+
+    // 2) Server starten
+    async fn wait_ready(client: &Client<hyper::client::HttpConnector>, addr: &str, secs: u64) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(secs);
+        loop {
+            if Instant::now() > deadline { return false; }
+            let uri: Uri = format!("http://{}/readyz", addr).parse().unwrap();
+            match client.get(uri).await {
+                Ok(resp) if resp.status() == StatusCode::OK => return true,
+                _ => sleep(Duration::from_millis(100)).await,
+            }
+        }
+    }
+
+    let client: Client<hyper::client::HttpConnector> = Client::new();
+    let bin = cargo_bin("phantom-node");
+    let port = {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral");
+        let p = l.local_addr().unwrap().port();
+        drop(l);
+        p
+    };
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = Command::new(&bin)
+        .arg("status-serve")
+        .arg("--addr").arg(&addr)
+        .arg("--mempool-dir").arg(mempool_dir.to_string_lossy().to_string())
+        .stdin(Stdio::null())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .expect("spawn phantom-node status-serve");
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        if Instant::now() > deadline { panic!("server not ready in time"); }
+        if let Ok(Some(status)) = child.try_wait() {
+            panic!("status-serve exited early: {:?}", status);
+        }
+        if wait_ready(&client, &addr, 1).await { break; }
+    }
+
+    // 3) Testdaten
+    let ikm = blake3_32(b"vrf_att_e2e_k1");
+    let kp = bls_keygen_from_ikm(&ikm).expect("keygen");
+    let current_anchor_index: u64 = 30_000;
+    let epoch_len: u64 = 10_000;
+    let epoch = derive_epoch(current_anchor_index, epoch_len);
+    let network_id = blake3_32(b"nid-att-e2e");
+    let last_anchor_id = blake3_32(b"aid-att-e2e");
+    let seed = derive_vrf_seed(network_id, pc_types::AnchorId(last_anchor_id));
+    let msg = vrf_msg(&seed, epoch);
+    let (proof, _y) = bls_vrf_prove(&msg, &kp.sk);
+
+    let cand = serde_json::json!({
+        "recipient_id": hex32(&blake3_32(b"rcpt-att-e2e")),
+        "operator_id": hex32(&blake3_32(b"op-att-e2e")),
+        "bls_pk": hex48(&kp.pk.to_bytes()),
+        "last_selected_at": 0u64,
+        "attendance_recent_pct": 100u8,
+        "vrf_proof": hex96(&proof),
+    });
+
+    // 4) POST /consensus/select_attestors
+    let req_body = serde_json::json!({
+        "m": 1,
+        "current_anchor_index": current_anchor_index,
+        "epoch_len": epoch_len,
+        "network_id": hex32(&network_id),
+        "last_anchor_id": hex32(&last_anchor_id),
+        "rotation": { "cooldown_anchors": 10_000u64, "min_attendance_pct": 50u8 },
+        "candidates": [cand.clone()],
+    });
+    let uri_sa: Uri = format!("http://{}/consensus/select_attestors", addr).parse().unwrap();
+    let req_sa = Request::builder()
+        .method(Method::POST)
+        .uri(uri_sa)
+        .header("content-type", "application/json")
+        .body(Body::from(req_body.to_string()))
+        .unwrap();
+    let resp_sa = client.request(req_sa).await.expect("select_attestors resp");
+    assert_eq!(resp_sa.status(), StatusCode::OK);
+
+    // 5) POST /consensus/select_attestors_fair
+    let req_fair = serde_json::json!({
+        "m": 1,
+        "current_anchor_index": current_anchor_index,
+        "epoch_len": epoch_len,
+        "network_id": hex32(&network_id),
+        "last_anchor_id": hex32(&last_anchor_id),
+        "rotation": { "cooldown_anchors": 10_000u64, "min_attendance_pct": 50u8 },
+        "cap_limit_per_op": 1u32,
+        "recent_op_selection_count": [],
+        "perf_index": [],
+        "candidates": [cand.clone()],
+    });
+    let uri_sf: Uri = format!("http://{}/consensus/select_attestors_fair", addr).parse().unwrap();
+    let req_sf = Request::builder()
+        .method(Method::POST)
+        .uri(uri_sf)
+        .header("content-type", "application/json")
+        .body(Body::from(req_fair.to_string()))
+        .unwrap();
+    let resp_sf = client.request(req_sf).await.expect("select_attestors_fair resp");
+    assert_eq!(resp_sf.status(), StatusCode::OK);
+
+    // 6) Aufräumen
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+
 fn hex32(b: &[u8; 32]) -> String { hex::encode(b) }
 fn hex48(b: &[u8; 48]) -> String { hex::encode(b) }
 fn hex96(b: &[u8; 96]) -> String { hex::encode(b) }

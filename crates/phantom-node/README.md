@@ -35,6 +35,78 @@ Status-/Broadcast-HTTP-Server und Node-Runtime-Hilfen.
     }
     ```
 
+## Authentifizierung
+
+Wenn der Server mit `--require-auth true` gestartet wird, müssen alle geschützten Endpoints mit einem Bearer‑Token aufgerufen werden.
+
+- Header: `Authorization: Bearer <TOKEN>`
+- Token-Konfiguration: via CLI `--auth-token <TOKEN>` oder Config.
+
+### cURL‑Beispiele
+
+- Attestoren‑Selektion:
+```bash
+curl -sS -X POST \
+  -H "Authorization: Bearer supersecret" \
+  -H "Content-Type: application/json" \
+  --data '{
+    "m": 128,
+    "current_anchor_index": 12345,
+    "epoch_len": 10000,
+    "network_id": "<hex32>",
+    "last_anchor_id": "<hex32>",
+    "rotation": {"cooldown_anchors":10000, "min_attendance_pct":50},
+    "candidates": [{
+      "recipient_id": "<hex32>",
+      "operator_id": "<hex32>",
+      "bls_pk": "<hex48>",
+      "last_selected_at": 0,
+      "attendance_recent_pct": 100,
+      "vrf_proof": "<hex96>"
+    }]
+  }' \
+  http://127.0.0.1:8080/consensus/select_attestors
+```
+
+- BLS‑Aggregation:
+```bash
+curl -sS -X POST \
+  -H "Authorization: Bearer supersecret" \
+  -H "Content-Type: application/json" \
+  --data '{"parts":["<hex96>","<hex96>"]}' \
+  http://127.0.0.1:8080/consensus/attestor_aggregate_sigs
+```
+
+- Fast‑Aggregate‑Verify:
+```bash
+curl -sS -X POST \
+  -H "Authorization: Bearer supersecret" \
+  -H "Content-Type: application/json" \
+  --data '{
+    "network_id":"<hex32>",
+    "epoch":1,
+    "topic":"<hex>",
+    "bls_pks":["<hex48>","<hex48>"],
+    "agg_sig":"<hex96>"
+  }' \
+  http://127.0.0.1:8080/consensus/attestor_fast_verify
+```
+
+- Fast‑Verify (Seats‑basiert):
+```bash
+curl -sS -X POST \
+  -H "Authorization: Bearer supersecret" \
+  -H "Content-Type: application/json" \
+  --data '{
+    "network_id":"<hex32>",
+    "epoch":1,
+    "topic":"<hex>",
+    "seats":[{"bls_pk":"<hex48>"},{"bls_pk":"<hex48>"}],
+    "agg_sig":"<hex96>"
+  }' \
+  http://127.0.0.1:8080/consensus/attestor_fast_verify_seats
+```
+
 - POST `/consensus/attestor_aggregate_sigs` (Content-Type: `application/json`)
   - Zweck: Aggregiert mehrere BLS‑Signaturen (G2) für dieselbe Nachricht.
   - Request:

@@ -898,6 +898,22 @@ if whole.len() > MAX_HTTP_BODY_BYTES {
                     resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json"));
                     return Ok::<_, anyhow::Error>(resp);
                 } else if req.uri().path() == "/consensus/select_attestors" && req.method() == hyper::Method::POST {
+                    if require_auth {
+                        let expected = auth_token.as_deref().unwrap_or("");
+                        let got = req.headers().get(hyper::header::AUTHORIZATION);
+                        let ok = if let Some(val) = got {
+                            if let Ok(s) = val.to_str() {
+                                if let Some(b) = s.strip_prefix("Bearer ") {
+                                    !expected.is_empty() && b == expected
+                                } else { false }
+                            } else { false }
+                        } else { false };
+                        if !ok {
+                            let mut resp = Response::builder().status(401).body(Body::from("{\"ok\":false,\"error\":\"unauthorized\"}".to_string())).unwrap();
+                            resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json"));
+                            return Ok::<_, anyhow::Error>(resp);
+                        }
+                    }
                     #[derive(serde::Deserialize)]
                     struct ReqRotationCfg { cooldown_anchors: u64, min_attendance_pct: u8 }
                     #[derive(serde::Deserialize)]
@@ -971,6 +987,22 @@ if whole.len() > MAX_HTTP_BODY_BYTES {
                     resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json"));
                     return Ok::<_, anyhow::Error>(resp);
                 } else if req.uri().path() == "/consensus/select_attestors_fair" && req.method() == hyper::Method::POST {
+                    if require_auth {
+                        let expected = auth_token.as_deref().unwrap_or("");
+                        let got = req.headers().get(hyper::header::AUTHORIZATION);
+                        let ok = if let Some(val) = got {
+                            if let Ok(s) = val.to_str() {
+                                if let Some(b) = s.strip_prefix("Bearer ") {
+                                    !expected.is_empty() && b == expected
+                                } else { false }
+                            } else { false }
+                        } else { false };
+                        if !ok {
+                            let mut resp = Response::builder().status(401).body(Body::from("{\"ok\":false,\"error\":\"unauthorized\"}".to_string())).unwrap();
+                            resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json"));
+                            return Ok::<_, anyhow::Error>(resp);
+                        }
+                    }
                     #[derive(serde::Deserialize)]
                     struct ReqRotationCfg { cooldown_anchors: u64, min_attendance_pct: u8 }
                     #[derive(serde::Deserialize)]
@@ -1071,6 +1103,12 @@ if whole.len() > MAX_HTTP_BODY_BYTES {
                     resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json"));
                     return Ok::<_, anyhow::Error>(resp);
                 } else if req.uri().path() == "/consensus/attestor_payout_root" && req.method() == hyper::Method::POST {
+                    if require_auth {
+                        let expected = auth_token.as_deref().unwrap_or("");
+                        let got = req.headers().get(hyper::header::AUTHORIZATION);
+                        let ok = if let Some(val) = got { if let Ok(s) = val.to_str() { if let Some(b) = s.strip_prefix("Bearer ") { !expected.is_empty() && b == expected } else { false } } else { false } } else { false };
+                        if !ok { let mut resp = Response::builder().status(401).body(Body::from("{\"ok\":false,\"error\":\"unauthorized\"}".to_string())).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); return Ok::<_, anyhow::Error>(resp); }
+                    }
                     #[derive(serde::Deserialize)]
                     struct FeeParamsIn { p_base_bp: u16, p_prop_bp: u16, p_perf_bp: u16, p_att_bp: u16, d_max: u8, perf_weights: Vec<u32> }
                     #[derive(serde::Deserialize)]
@@ -1106,6 +1144,12 @@ if whole.len() > MAX_HTTP_BODY_BYTES {
                     resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json"));
                     return Ok::<_, anyhow::Error>(resp);
                 } else if req.uri().path() == "/consensus/attestor_payout_proof" && req.method() == hyper::Method::POST {
+                    if require_auth {
+                        let expected = auth_token.as_deref().unwrap_or("");
+                        let got = req.headers().get(hyper::header::AUTHORIZATION);
+                        let ok = if let Some(val) = got { if let Ok(s) = val.to_str() { if let Some(b) = s.strip_prefix("Bearer ") { !expected.is_empty() && b == expected } else { false } } else { false } } else { false };
+                        if !ok { let mut resp = Response::builder().status(401).body(Body::from("{\"ok\":false,\"error\":\"unauthorized\"}".to_string())).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); return Ok::<_, anyhow::Error>(resp); }
+                    }
                     #[derive(serde::Deserialize)]
                     struct FeeParamsIn { p_base_bp: u16, p_prop_bp: u16, p_perf_bp: u16, p_att_bp: u16, d_max: u8, perf_weights: Vec<u32> }
                     #[derive(serde::Deserialize)]
@@ -1160,6 +1204,12 @@ if whole.len() > MAX_HTTP_BODY_BYTES {
                     resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json"));
                     return Ok::<_, anyhow::Error>(resp);
                 } else if req.uri().path() == "/consensus/attestor_aggregate_sigs" && req.method() == hyper::Method::POST {
+                    if require_auth {
+                        let expected = auth_token.as_deref().unwrap_or("");
+                        let got = req.headers().get(hyper::header::AUTHORIZATION);
+                        let ok = if let Some(val) = got { if let Ok(s) = val.to_str() { if let Some(b) = s.strip_prefix("Bearer ") { !expected.is_empty() && b == expected } else { false } } else { false } } else { false };
+                        if !ok { let mut resp = Response::builder().status(401).body(Body::from("{\"ok\":false,\"error\":\"unauthorized\"}".to_string())).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); return Ok::<_, anyhow::Error>(resp); }
+                    }
                     #[derive(serde::Deserialize)]
                     struct AggReq { parts: Vec<String> }
                     let whole_pre = match tokio::time::timeout(std::time::Duration::from_secs(5), hyper::body::to_bytes(req.into_body())).await {
@@ -1197,6 +1247,12 @@ if whole.len() > MAX_HTTP_BODY_BYTES {
                         }
                     }
                 } else if req.uri().path() == "/consensus/attestor_fast_verify" && req.method() == hyper::Method::POST {
+                    if require_auth {
+                        let expected = auth_token.as_deref().unwrap_or("");
+                        let got = req.headers().get(hyper::header::AUTHORIZATION);
+                        let ok = if let Some(val) = got { if let Ok(s) = val.to_str() { if let Some(b) = s.strip_prefix("Bearer ") { !expected.is_empty() && b == expected } else { false } } else { false } } else { false };
+                        if !ok { let mut resp = Response::builder().status(401).body(Body::from("{\"ok\":false,\"error\":\"unauthorized\"}".to_string())).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); return Ok::<_, anyhow::Error>(resp); }
+                    }
                     #[derive(serde::Deserialize)]
                     struct VerifyReq { network_id: String, epoch: u64, topic: String, bls_pks: Vec<String>, agg_sig: String }
                     fn hex32(s: &str) -> Option<[u8;32]> { let mut out=[0u8;32]; if s.len()!=64 { return None; } let raw=hex::decode(s).ok()?; if raw.len()!=32 { return None; } out.copy_from_slice(&raw); Some(out) }
@@ -1233,6 +1289,12 @@ if whole.len() > MAX_HTTP_BODY_BYTES {
                     resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json"));
                     return Ok::<_, anyhow::Error>(resp);
                 } else if req.uri().path() == "/consensus/attestor_fast_verify_seats" && req.method() == hyper::Method::POST {
+                    if require_auth {
+                        let expected = auth_token.as_deref().unwrap_or("");
+                        let got = req.headers().get(hyper::header::AUTHORIZATION);
+                        let ok = if let Some(val) = got { if let Ok(s) = val.to_str() { if let Some(b) = s.strip_prefix("Bearer ") { !expected.is_empty() && b == expected } else { false } } else { false } } else { false };
+                        if !ok { let mut resp = Response::builder().status(401).body(Body::from("{\"ok\":false,\"error\":\"unauthorized\"}".to_string())).unwrap(); resp.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json")); return Ok::<_, anyhow::Error>(resp); }
+                    }
                     #[derive(serde::Deserialize)]
                     struct SeatIn { bls_pk: String }
                     #[derive(serde::Deserialize)]
