@@ -60,13 +60,23 @@ Einfacher lokaler Start (baut falls nötig, erzeugt `genesis.toml`, startet Metr
 
 ```bash
 ./scripts/start_localnet.sh
-```
 
 - Prometheus: http://localhost:9090
 - Grafana: http://localhost:3000 (admin/admin)
 - Metrics Endpoint: http://127.0.0.1:9100/metrics
 
-Siehe auch `docs/observability/docker-compose.yml`, `docs/prometheus/prometheus.yml`, `docs/grafana/phantom-node-mempool-dashboard.json`.
+See also `docs/observability/docker-compose.yml`, `docs/prometheus/prometheus.yml`, `docs/grafana/phantom-node-mempool-dashboard.json`.
+
+## Benchmarks & Referenzen
+
+- Detaillierte P2P-Bench-Anweisungen und Referenzwerte (p50/p95) in `crates/pc-p2p/README.md`.
+- Aggregation: `cargo run -p pc-p2p --bin bench_agg` erzeugt `target/criterion_agg.{json,csv,md}`.
+- Regression-Gate: `cargo run -p pc-p2p --bin bench_gate -- --baseline crates/pc-p2p/benches/baselines/<ts>/criterion_agg.csv`.
+
+Cross-links:
+
+- `pc-p2p::bench_agg`: aggregates `target/criterion_agg.{json,csv,md}` from multiple runs.
+- `pc-p2p::bench_gate`: compares current performance to a baseline CSV file.
 
 Serve metrics on a dedicated HTTP endpoint:
 

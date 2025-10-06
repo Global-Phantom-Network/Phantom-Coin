@@ -8,25 +8,33 @@ license = "AGPL-3.0-only"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 hex = "0.4"
-hyper = { version = "0.14", features = ["server","http1","tcp"] }
+hyper = { version = "0.14", features = ["server","client","http1","tcp"] }
 pc-codec = { path = "../pc-codec" }
+pc-types = { path = "../pc-types" }
 pc-consensus = { path = "../pc-consensus" }
 pc-crypto = { path = "../pc-crypto" }
 pc-da = { path = "../pc-da", features = ["async"] }
-pc-p2p = { path = "../pc-p2p", features = ["async", "quic"] }
+pc-p2p = { path = "../pc-p2p", features = ["async", "quic", "libp2p"] }
 pc-store = { path = "../pc-store" }
-pc-types = { path = "../pc-types" }
 pc-state = { path = "../pc-state" }
 tokio = { version = "1.39", features = ["rt-multi-thread","macros","time","signal","net","sync"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+rand = "0.8"
 toml = "0.8"
 once_cell = "1.19"
 async-trait = "0.1"
 lru = "0.12"
 num_cpus = "1.16"
+tokio-rustls = "0.26"
+rustls = { version = "0.23", default-features = false, features = ["std"] }
+rustls-pemfile = "2"
 
 [features]
 default = []
 rocksdb = ["pc-state/rocksdb"]
+
+[dev-dependencies]
+assert_cmd = "2"

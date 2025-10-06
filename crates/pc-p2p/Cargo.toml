@@ -7,6 +7,7 @@ license = "AGPL-3.0-only"
 [dependencies]
 pc-codec = { path = "../pc-codec" }
 pc-types = { path = "../pc-types" }
+pc-crypto = { path = "../pc-crypto", optional = true }
 tracing = "0.1"
 tokio = { version = "1.39", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util"], optional = true }
 async-trait = { version = "0.1", optional = true }
@@ -14,8 +15,54 @@ quinn = { version = "0.10", optional = true }
 rustls = { version = "0.21", optional = true }
 rcgen = { version = "0.11", optional = true }
 futures-util = { version = "0.3", default-features = true, optional = true }
+libp2p = { version = "0.54", default-features = false, features = ["gossipsub", "request-response", "tcp", "dns", "noise", "yamux", "tokio", "macros"], optional = true }
+tokio-stream = { version = "0.1", optional = true }
+hex = { version = "0.4", optional = true }
+serde_json = "1"
 
 [features]
 default = []
 async = ["tokio", "async-trait"]
 quic = ["async", "quinn", "rustls", "rcgen", "futures-util"]
+libp2p = ["async", "dep:libp2p", "dep:tokio-stream", "dep:pc-crypto", "dep:hex"]
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["async_tokio"] }
+tokio = { version = "1.39", features = ["rt-multi-thread", "macros", "time"] }
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+futures = "0.3"
+
+[[bench]]
+name = "p2p_bench"
+harness = false
+required-features = ["async"]
+
+[[bench]]
+name = "p2p_libp2p_e2e"
+harness = false
+required-features = ["async", "libp2p"]
+
+[[bench]]
+name = "p2p_backpressure_bench"
+harness = false
+required-features = ["async"]
+
+[[bench]]
+name = "p2p_rate_limit_bench"
+harness = false
+required-features = ["async"]
+
+[[bench]]
+name = "p2p_libp2p_rpc"
+harness = false
+required-features = ["async", "libp2p"]
+
+[[bench]]
+name = "p2p_libp2p_extra"
+harness = false
+required-features = ["async", "libp2p"]
+
+[[bench]]
+name = "p2p_quic_bench"
+harness = false
+required-features = ["async", "quic"]

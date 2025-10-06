@@ -1,0 +1,93 @@
+name: Benchmarks
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/bench.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  benches-libp2p:
+    name: Benches (async + libp2p)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build benches (no run)
+        run: cargo bench --no-run -q
+
+      - name: Run benches (async libp2p)
+        run: cargo bench --features "async libp2p"
+
+      - name: Aggregate results
+        run: cargo run -q -p pc-p2p --bin bench_agg
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: benches-libp2p-artifacts
+          path: |
+            target/criterion_raw/**
+            target/criterion_agg.json
+            target/criterion_agg.csv
+            target/criterion_agg.md
+
+  benches-quic:
+    name: Benches (async + quic)
+    runs-on: ubuntu-latest
+    needs: benches-libp2p
+    # Set to true if QUIC deps are flaky in CI; artifacts will still upload from previous job.
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build benches (no run)
+        run: cargo bench --no-run -q
+
+      - name: Run benches (async quic)
+        run: cargo bench --features "async quic"
+
+      - name: Aggregate results
+        run: cargo run -q -p pc-p2p --bin bench_agg
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: benches-quic-artifacts
+          path: |
+            target/criterion_raw/**
+            target/criterion_agg.json
+            target/criterion_agg.csv
+            target/criterion_agg.md

@@ -6,6 +6,8 @@ use blst::{min_pk as bls, BLST_ERROR};
 // IETF ciphersuite with POP variant (min_pk: pubkeys in G1, signatures in G2)
 const DST_SIG: &[u8] = b"BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_";
 const DST_POP: &[u8] = b"BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_";
+// Domain-Separation für BLS-basierte VRF (Signatur dient als VRF-Proof; Output = H(sig))
+const DST_VRF: &[u8] = b"PC_BLS_VRF_V1\x01";
 
 #[derive(Clone)]
 pub struct BlsSecretKey(pub bls::SecretKey);
@@ -20,6 +22,34 @@ impl BlsPublicKey {
     pub fn from_bytes(b: &[u8; 48]) -> Option<Self> {
         bls::PublicKey::from_bytes(b).ok().map(Self)
     }
+}
+
+impl core::fmt::Debug for BlsPublicKey {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let bytes = self.to_bytes();
+        write!(f, "BlsPublicKey(")?;
+        for b in bytes.iter() {
+            write!(f, "{:02x}", b)?;
+        }
+        write!(f, ")")
+    }
+}
+/// VRF-Proof auf Basis von BLS: proof = Sign_{DST_VRF}(msg), output = blake3_32(proof)
+pub fn bls_vrf_prove(msg: &[u8], sk: &BlsSecretKey) -> ([u8; 96], crate::Hash32) {
+    let sig = sk.0.sign(msg, DST_VRF, &[]).to_bytes();
+    let y = crate::blake3_32(&sig);
+    (sig, y)
+}
+
+/// VRF-Verify: prüft proof unter DST_VRF; gibt deterministischen Output zurück, falls gültig
+pub fn bls_vrf_verify(msg: &[u8], proof: &[u8; 96], pk: &BlsPublicKey) -> Option<crate::Hash32> {
+    let sig = match bls::Signature::from_bytes(proof) {
+        Ok(s) => s,
+        Err(_) => return None,
+    };
+    let ok = sig.verify(true, msg, DST_VRF, &[], &pk.0, true) == BLST_ERROR::BLST_SUCCESS;
+    if !ok { return None; }
+    Some(crate::blake3_32(proof))
 }
 
 pub struct BlsKeypair {

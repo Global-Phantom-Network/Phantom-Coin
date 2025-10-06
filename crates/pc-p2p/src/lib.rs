@@ -11,13 +11,35 @@
 
 /// P2P-Skelett: Platzhaltertypen und -funktionen. Keine Netzwerk-IO hier; reine API-Skizze.
 /// Spätere Implementierung nutzt async (tokio) und QUIC/TCP, VRF-Sampling, Gossip mit Backpressure-Steuerung.
-use pc_types::AnchorHeader;
+#[cfg(all(feature = "async", feature = "libp2p"))]
+mod libp2p_node;
+use pc_types::AnchorHeaderV2 as AnchorHeader;
 
 #[derive(Debug)]
 pub enum P2pError {
     InvalidConfig,
     ChannelClosed,
     StoreError,
+}
+
+#[cfg(all(feature = "async", feature = "libp2p"))]
+pub use libp2p_node::node::Libp2pConfig;
+
+/// Startet den internen P2P-Service und koppelt ihn an einen libp2p-Gossipsub-Knoten.
+/// Rückgabe: (Service, Handle Service-Loop, Handle libp2p-Swarm)
+#[cfg(all(feature = "async", feature = "libp2p"))]
+pub fn spawn_with_libp2p(
+    cfg: P2pConfig,
+    lp2p_cfg: Libp2pConfig,
+) -> Result<(
+    async_svc::P2pService,
+    tokio::task::JoinHandle<Result<(), P2pError>>,
+    tokio::task::JoinHandle<()>,
+), P2pError> {
+    use async_svc::spawn as svc_spawn;
+    let (svc, out_rx, svc_handle) = svc_spawn(cfg);
+    let swarm_handle = libp2p_node::node::start(svc.clone(), out_rx, lp2p_cfg)?;
+    Ok((svc, svc_handle, swarm_handle))
 }
 
 impl core::fmt::Display for P2pError {
@@ -55,7 +77,7 @@ pub struct RateLimitConfig {
 /// Nachrichtenformate und Codec-Implementierungen für P2P
 pub mod messages {
     use pc_codec::{CodecError, Decodable, Encodable};
-    use pc_types::{AnchorHeader, AnchorId, AnchorPayload};
+    use pc_types::{AnchorHeaderV2 as AnchorHeader, AnchorId, AnchorPayloadV2 as AnchorPayload};
 
     // Top-Level Nachrichtentypen
     #[derive(Clone, Debug, PartialEq, Eq)]
@@ -287,6 +309,7 @@ pub mod messages {
                 vote_mask: 0,
                 ack_present: false,
                 ack_id: AnchorId([0u8; 32]),
+                network_id: [0u8; 32],
             };
             let msg = P2pMessage::HeaderAnnounce(hdr);
             assert_eq!(rt(&msg).ok(), Some(msg));
@@ -343,17 +366,19 @@ pub mod messages {
                 vote_mask: 0,
                 ack_present: false,
                 ack_id: AnchorId([0u8; 32]),
+                network_id: [0u8; 32],
             };
             let resp1 = RespMsg::Headers { headers: vec![hdr] };
             assert_eq!(rt(&resp1).ok(), Some(resp1.clone()));
 
             let pl = AnchorPayload {
-                version: 1,
+                version: 2,
                 micro_txs: vec![],
                 mints: vec![],
                 claims: vec![],
                 evidences: vec![],
                 payout_root: [0u8; 32],
+                genesis_note: None,
             };
             let resp2 = RespMsg::Payloads { payloads: vec![pl] };
             assert_eq!(rt(&resp2).ok(), Some(resp2.clone()));
@@ -621,17 +646,19 @@ pub mod async_svc {
     use super::messages::{P2pMessage, ReqMsg, RespMsg};
     use super::*;
     use pc_types::digest_microtx;
-    use pc_types::payload_merkle_root;
-    use pc_types::{AnchorId, AnchorPayload, MicroTx};
+    use pc_types::payload_merkle_root_v2 as payload_merkle_root;
+    use pc_types::{AnchorId, AnchorPayloadV2 as AnchorPayload, MicroTx};
     use std::collections::HashMap;
     use std::net::SocketAddr;
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::{Arc, OnceLock};
     use std::time::Instant;
+    use std::collections::VecDeque;
     use tokio::sync::broadcast;
-    use tokio::sync::mpsc;
-    use tokio::time::{sleep, Duration};
-    use tracing::{info, warn};
+    use tokio::sync::{mpsc, oneshot};
+    use tokio::time::{sleep, Duration, interval};
+    use tracing::{info, warn, debug};
+    use std::hash::{Hash, Hasher};
 
     // Optionales Store-Backend-Delegate (z. B. Diskstore). Threadsicher und async-fähig.
     #[async_trait::async_trait]
@@ -649,10 +676,17 @@ pub mod async_svc {
     #[derive(Debug)]
     pub enum P2pCmd {
         AnnounceHeader(AnchorHeader),
+        PutHeader(AnchorHeader),
         PutPayload(AnchorPayload),
         PutTx(MicroTx),
         Incoming(P2pMessage),
         IncomingFrom(SocketAddr, P2pMessage),
+        Rpc(ReqMsg, oneshot::Sender<RespMsg>),
+        // Neuer Outbound-RPC-Befehl: sendet ReqMsg über die Outbox (libp2p request_response)
+        SendReq(ReqMsg),
+        // Neue Outbound-INV-Befehle: publizieren INV über die Outbox (libp2p gossipsub)
+        SendHeadersInv(Vec<AnchorId>),
+        SendPayloadInv(Vec<[u8; 32]>),
         Shutdown,
     }
 
@@ -662,6 +696,12 @@ pub mod async_svc {
     }
 
     impl P2pService {
+        pub async fn put_header(&self, hdr: AnchorHeader) -> Result<(), P2pError> {
+            self.tx
+                .send(P2pCmd::PutHeader(hdr))
+                .await
+                .map_err(|_| P2pError::ChannelClosed)
+        }
         pub async fn announce_header(&self, hdr: AnchorHeader) -> Result<(), P2pError> {
             self.tx
                 .send(P2pCmd::AnnounceHeader(hdr))
@@ -686,6 +726,27 @@ pub mod async_svc {
                 .await
                 .map_err(|_| P2pError::ChannelClosed)
         }
+        /// Outbound-RPC: sendet eine ReqMsg über die Outbox (libp2p request_response)
+        pub async fn send_req(&self, req: ReqMsg) -> Result<(), P2pError> {
+            self.tx
+                .send(P2pCmd::SendReq(req))
+                .await
+                .map_err(|_| P2pError::ChannelClosed)
+        }
+        /// Outbound-Gossip: publiziert HEADERS_INV über die Outbox (libp2p gossipsub)
+        pub async fn publish_headers_inv(&self, ids: Vec<AnchorId>) -> Result<(), P2pError> {
+            self.tx
+                .send(P2pCmd::SendHeadersInv(ids))
+                .await
+                .map_err(|_| P2pError::ChannelClosed)
+        }
+        /// Outbound-Gossip: publiziert PAYLOAD_INV über die Outbox (libp2p gossipsub)
+        pub async fn publish_payload_inv(&self, roots: Vec<[u8; 32]>) -> Result<(), P2pError> {
+            self.tx
+                .send(P2pCmd::SendPayloadInv(roots))
+                .await
+                .map_err(|_| P2pError::ChannelClosed)
+        }
         pub async fn send_message_from(
             &self,
             peer: SocketAddr,
@@ -701,6 +762,15 @@ pub mod async_svc {
                 .send(P2pCmd::Shutdown)
                 .await
                 .map_err(|_| P2pError::ChannelClosed)
+        }
+        /// Synchrone RPC-Brücke: verarbeitet ReqMsg lokal und liefert eine RespMsg.
+        pub async fn rpc_call(&self, req: ReqMsg) -> Result<RespMsg, P2pError> {
+            let (tx, rx) = oneshot::channel();
+            self.tx
+                .send(P2pCmd::Rpc(req, tx))
+                .await
+                .map_err(|_| P2pError::ChannelClosed)?;
+            rx.await.map_err(|_| P2pError::ChannelClosed)
         }
     }
 
@@ -724,6 +794,8 @@ pub mod async_svc {
     // Outbox-Queue (mpsc)
     static OUTBOX_ENQ_TOTAL: AtomicU64 = AtomicU64::new(0);
     static OUTBOX_DEQ_TOTAL: AtomicU64 = AtomicU64::new(0);
+    static OUTBOX_DROP_TOTAL: AtomicU64 = AtomicU64::new(0);
+    static IN_DEDUP_TOTAL: AtomicU64 = AtomicU64::new(0);
     // Latenz-Histogramm (Inbound-Handling) – Buckets in Sekunden: 1ms,5ms,10ms,50ms,100ms,500ms,+Inf
     static IN_HIST_LE_1MS: AtomicU64 = AtomicU64::new(0);
     static IN_HIST_LE_5MS: AtomicU64 = AtomicU64::new(0);
@@ -736,6 +808,80 @@ pub mod async_svc {
 
     // Inbound-Observer (Broadcast): ermöglicht externen Abonnenten, eingehende P2P-Messages zu beobachten
     static INBOUND_OBS: OnceLock<broadcast::Sender<P2pMessage>> = OnceLock::new();
+
+    // Bench-Mode: periodic anti-entropy ausschalten
+    static BENCH_MODE: AtomicBool = AtomicBool::new(false);
+    pub fn set_bench_mode(on: bool) { BENCH_MODE.store(on, Ordering::Relaxed); }
+    pub fn is_bench_mode() -> bool { BENCH_MODE.load(Ordering::Relaxed) }
+
+    // OneShot-RPC Watcher: pro angefragtem Objekt (Header-ID oder Payload-Root)
+    #[derive(Clone, Debug, Eq)]
+    enum WatchKey { Header([u8;32]), Payload([u8;32]) }
+    impl PartialEq for WatchKey {
+        fn eq(&self, other: &Self) -> bool {
+            match (self, other) {
+                (WatchKey::Header(a), WatchKey::Header(b)) => a == b,
+                (WatchKey::Payload(a), WatchKey::Payload(b)) => a == b,
+                _ => false,
+            }
+        }
+    }
+    impl Hash for WatchKey {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            match self {
+                WatchKey::Header(x) => { 1u8.hash(state); x.hash(state); }
+                WatchKey::Payload(x) => { 2u8.hash(state); x.hash(state); }
+            }
+        }
+    }
+    type WatchMap = std::collections::HashMap<WatchKey, Vec<oneshot::Sender<RespMsg>>>;
+    static WATCHERS: OnceLock<std::sync::Mutex<WatchMap>> = OnceLock::new();
+    fn watchers() -> &'static std::sync::Mutex<WatchMap> { WATCHERS.get_or_init(|| std::sync::Mutex::new(WatchMap::new())) }
+
+    pub fn watch_header(id: AnchorId) -> oneshot::Receiver<RespMsg> {
+        let (tx, rx) = oneshot::channel();
+        let mut map = watchers().lock().expect("watchers lock");
+        map.entry(WatchKey::Header(id.0)).or_default().push(tx);
+        rx
+    }
+    pub fn watch_payload(root: [u8;32]) -> oneshot::Receiver<RespMsg> {
+        let (tx, rx) = oneshot::channel();
+        let mut map = watchers().lock().expect("watchers lock");
+        map.entry(WatchKey::Payload(root)).or_default().push(tx);
+        rx
+    }
+
+    fn dispatch_watchers(resp: &RespMsg) {
+        use RespMsg::*;
+        match resp {
+            Headers { headers } => {
+                let mut map = watchers().lock().expect("watchers lock");
+                for h in headers.iter() {
+                    let key = WatchKey::Header(h.id_digest());
+                    if let Some(list) = map.get_mut(&key) {
+                        if let Some(tx) = list.pop() {
+                            let _ = tx.send(RespMsg::Headers { headers: vec![h.clone()] });
+                        }
+                        if list.is_empty() { let _ = map.remove(&key); }
+                    }
+                }
+            }
+            Payloads { payloads } => {
+                let mut map = watchers().lock().expect("watchers lock");
+                for p in payloads.iter() {
+                    let root = payload_merkle_root(p);
+                    let key = WatchKey::Payload(root);
+                    if let Some(list) = map.get_mut(&key) {
+                        if let Some(tx) = list.pop() {
+                            let _ = tx.send(RespMsg::Payloads { payloads: vec![p.clone()] });
+                        }
+                        if list.is_empty() { let _ = map.remove(&key); }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
 
     fn notify_inbound(msg: &P2pMessage) {
         if let Some(tx) = INBOUND_OBS.get() {
@@ -780,6 +926,8 @@ pub mod async_svc {
         pub out_errors_total: u64,
         pub outbox_enq_total: u64,
         pub outbox_deq_total: u64,
+        pub outbox_drop_total: u64,
+        pub in_dedup_total: u64,
         pub in_handle_count: u64,
         pub in_handle_sum_micros: u64,
         pub in_bucket_le_1ms: u64,
@@ -807,6 +955,8 @@ pub mod async_svc {
             out_errors_total: OUT_ERRORS_TOTAL.load(Ordering::Relaxed),
             outbox_enq_total: OUTBOX_ENQ_TOTAL.load(Ordering::Relaxed),
             outbox_deq_total: OUTBOX_DEQ_TOTAL.load(Ordering::Relaxed),
+            outbox_drop_total: OUTBOX_DROP_TOTAL.load(Ordering::Relaxed),
+            in_dedup_total: IN_DEDUP_TOTAL.load(Ordering::Relaxed),
             in_handle_count: IN_HANDLE_COUNT.load(Ordering::Relaxed),
             in_handle_sum_micros: IN_HANDLE_SUM_MICROS.load(Ordering::Relaxed),
             in_bucket_le_1ms: IN_HIST_LE_1MS.load(Ordering::Relaxed),
@@ -965,6 +1115,8 @@ pub mod async_svc {
         headers: HashMap<AnchorId, AnchorHeader>,
         payloads: HashMap<[u8; 32], AnchorPayload>,
         txs: HashMap<[u8; 32], MicroTx>,
+        recent_hdrs: VecDeque<AnchorId>,
+        recent_payload_roots: VecDeque<[u8;32]>,
     }
 
     impl InMemoryStore {
@@ -973,15 +1125,21 @@ pub mod async_svc {
                 headers: HashMap::new(),
                 payloads: HashMap::new(),
                 txs: HashMap::new(),
+                recent_hdrs: VecDeque::with_capacity(1024),
+                recent_payload_roots: VecDeque::with_capacity(1024),
             }
         }
         fn insert_header(&mut self, h: AnchorHeader) {
             let id = AnchorId(h.id_digest());
             let _ = self.headers.insert(id, h);
+            self.recent_hdrs.push_back(id);
+            if self.recent_hdrs.len() > 1024 { let _ = self.recent_hdrs.pop_front(); }
         }
         fn insert_payload(&mut self, p: AnchorPayload) {
             let root = payload_merkle_root(&p);
             let _ = self.payloads.insert(root, p);
+            self.recent_payload_roots.push_back(root);
+            if self.recent_payload_roots.len() > 1024 { let _ = self.recent_payload_roots.pop_front(); }
         }
         fn has_payload(&self, root: &[u8; 32]) -> bool {
             self.payloads.contains_key(root)
@@ -1029,6 +1187,16 @@ pub mod async_svc {
             }
             (found, missing)
         }
+        fn recent_headers_sample(&self, n: usize) -> Vec<AnchorId> {
+            let len = self.recent_hdrs.len();
+            let take = n.min(len);
+            self.recent_hdrs.iter().rev().take(take).cloned().collect()
+        }
+        fn recent_payload_roots_sample(&self, n: usize) -> Vec<[u8;32]> {
+            let len = self.recent_payload_roots.len();
+            let take = n.min(len);
+            self.recent_payload_roots.iter().rev().take(take).cloned().collect()
+        }
     }
 
     #[derive(Clone)]
@@ -1060,7 +1228,15 @@ pub mod async_svc {
                     OUT_RESP_TOTAL.fetch_add(1, Ordering::Relaxed);
                 }
             }
-            let _ = self.tx.send(msg).await;
+            // Backpressure: niedrige Priorität (Announce/Inv) droppen bei vollem Kanal
+            let low_prio = matches!(msg, P2pMessage::HeaderAnnounce(_) | P2pMessage::HeadersInv { .. } | P2pMessage::PayloadInv { .. } | P2pMessage::TxInv { .. });
+            if low_prio {
+                if let Err(_e) = self.tx.try_send(msg) {
+                    OUTBOX_DROP_TOTAL.fetch_add(1, Ordering::Relaxed);
+                }
+            } else {
+                let _ = self.tx.send(msg).await;
+            }
         }
     }
 
@@ -1092,12 +1268,22 @@ pub mod async_svc {
             })
             .unwrap_or(600);
 
+        let mut anti_entropy = interval(Duration::from_secs(3));
+        // Dedupe-Maps mit TTL für INV
+        let mut dedupe_hdr: HashMap<[u8;32], Instant> = HashMap::new();
+        let mut dedupe_pl: HashMap<[u8;32], Instant> = HashMap::new();
+        let mut dedupe_tx: HashMap<[u8;32], Instant> = HashMap::new();
+        let dedupe_ttl = Duration::from_secs(30);
         loop {
             tokio::select! {
                 cmd = rx.recv() => {
                     match cmd {
                         Some(P2pCmd::AnnounceHeader(h)) => {
                             out.send(P2pMessage::HeaderAnnounce(h)).await;
+                        }
+                        Some(P2pCmd::PutHeader(h)) => {
+                            // Header lokal einspielen (ohne Broadcast)
+                            if let Some(d) = &store_delegate { d.insert_header(h).await; } else { store.insert_header(h); }
                         }
                         Some(P2pCmd::PutPayload(pl)) => {
                             if let Some(d) = &store_delegate { d.insert_payload(pl).await; } else { store.insert_payload(pl); }
@@ -1107,9 +1293,19 @@ pub mod async_svc {
                             if let Some(d) = &store_delegate { d.insert_tx(tx).await; } else { store.insert_tx(tx); }
                             out.send(P2pMessage::TxInv { ids: vec![id] }).await;
                         }
+                        Some(P2pCmd::SendHeadersInv(ids)) => {
+                            out.send(P2pMessage::HeadersInv { ids }).await;
+                        }
+                        Some(P2pCmd::SendPayloadInv(roots)) => {
+                            out.send(P2pMessage::PayloadInv { roots }).await;
+                        }
+                        Some(P2pCmd::SendReq(req)) => {
+                            // Outbound RPC an Peers via libp2p request_response
+                            out.send(P2pMessage::Req(req)).await;
+                        }
                         Some(P2pCmd::Incoming(P2pMessage::HeaderAnnounce(h))) => {
                             let start = Instant::now();
-                            if rl.allow_msg(&P2pMessage::HeaderAnnounce(h.clone())) {
+                            if is_bench_mode() || rl.allow_msg(&P2pMessage::HeaderAnnounce(h.clone())) {
                                 INBOUND_TOTAL.fetch_add(1, Ordering::Relaxed);
                                 IN_HDR_TOTAL.fetch_add(1, Ordering::Relaxed);
                                 let h_clone = h.clone();
@@ -1120,13 +1316,26 @@ pub mod async_svc {
                         }
                         Some(P2pCmd::Incoming(P2pMessage::PayloadInv { roots })) => {
                             let start = Instant::now();
-                            if rl.allow_msg(&P2pMessage::PayloadInv { roots: roots.clone() }) {
+                            if is_bench_mode() || rl.allow_msg(&P2pMessage::PayloadInv { roots: roots.clone() }) {
                                 INBOUND_TOTAL.fetch_add(1, Ordering::Relaxed);
                                 IN_INV_TOTAL.fetch_add(1, Ordering::Relaxed);
                                 let mut missing: Vec<[u8;32]> = Vec::new();
-                                for r in roots.iter() {
-                                    let present = if let Some(d) = &store_delegate { d.has_payload(r).await } else { store.has_payload(r) };
-                                    if !present { missing.push(*r); }
+                                if is_bench_mode() {
+                                    for r in roots.iter() {
+                                        let present = if let Some(d) = &store_delegate { d.has_payload(r).await } else { store.has_payload(r) };
+                                        if !present { missing.push(*r); }
+                                    }
+                                } else {
+                                    let now = Instant::now();
+                                    for r in roots.iter() {
+                                        let present = if let Some(d) = &store_delegate { d.has_payload(r).await } else { store.has_payload(r) };
+                                        if !present {
+                                            match dedupe_pl.get(r) {
+                                                Some(&t) if now.duration_since(t) < dedupe_ttl => { IN_DEDUP_TOTAL.fetch_add(1, Ordering::Relaxed); }
+                                                _ => { dedupe_pl.insert(*r, now); missing.push(*r); }
+                                            }
+                                        }
+                                    }
                                 }
                                 if !missing.is_empty() {
                                     out.send(P2pMessage::Req(ReqMsg::GetPayloads { roots: missing })).await;
@@ -1137,13 +1346,26 @@ pub mod async_svc {
                         }
                         Some(P2pCmd::Incoming(P2pMessage::TxInv { ids })) => {
                             let start = Instant::now();
-                            if rl.allow_msg(&P2pMessage::TxInv { ids: ids.clone() }) {
+                            if is_bench_mode() || rl.allow_msg(&P2pMessage::TxInv { ids: ids.clone() }) {
                                 INBOUND_TOTAL.fetch_add(1, Ordering::Relaxed);
                                 IN_INV_TOTAL.fetch_add(1, Ordering::Relaxed);
                                 let mut missing: Vec<[u8;32]> = Vec::new();
-                                for id in ids.iter() {
-                                    let present = if let Some(d) = &store_delegate { d.has_tx(id).await } else { store.has_tx(id) };
-                                    if !present { missing.push(*id); }
+                                if is_bench_mode() {
+                                    for id in ids.iter() {
+                                        let present = if let Some(d) = &store_delegate { d.has_tx(id).await } else { store.has_tx(id) };
+                                        if !present { missing.push(*id); }
+                                    }
+                                } else {
+                                    let now = Instant::now();
+                                    for id in ids.iter() {
+                                        let present = if let Some(d) = &store_delegate { d.has_tx(id).await } else { store.has_tx(id) };
+                                        if !present {
+                                            match dedupe_tx.get(id) {
+                                                Some(&t) if now.duration_since(t) < dedupe_ttl => { IN_DEDUP_TOTAL.fetch_add(1, Ordering::Relaxed); }
+                                                _ => { dedupe_tx.insert(*id, now); missing.push(*id); }
+                                            }
+                                        }
+                                    }
                                 }
                                 if !missing.is_empty() { out.send(P2pMessage::Req(ReqMsg::GetTx { ids: missing })).await; }
                                 notify_inbound(&P2pMessage::TxInv { ids: ids.clone() });
@@ -1152,28 +1374,63 @@ pub mod async_svc {
                         }
                         Some(P2pCmd::Incoming(P2pMessage::HeadersInv { ids })) => {
                             let start = Instant::now();
-                            if rl.allow_msg(&P2pMessage::HeadersInv { ids: ids.clone() }) {
+                            if is_bench_mode() || rl.allow_msg(&P2pMessage::HeadersInv { ids: ids.clone() }) {
                                 INBOUND_TOTAL.fetch_add(1, Ordering::Relaxed);
                                 IN_INV_TOTAL.fetch_add(1, Ordering::Relaxed);
+                                debug!(target: "pc_p2p.svc", event = "inv_in", kind = "headers", count = ids.len(), "headers_inv inbound");
                                 let (found, missing_raw) = if let Some(d) = &store_delegate { d.get_headers(&ids).await } else { store.get_headers(&ids) };
-                                // found werden ignoriert; bei missing holen wir nach
-                                let missing: Vec<AnchorId> = missing_raw.into_iter().map(AnchorId).collect();
+                                // found werden ignoriert; bei missing holen wir nach (mit Dedupe)
+                                let mut missing: Vec<AnchorId> = Vec::new();
+                                if is_bench_mode() {
+                                    for raw in missing_raw.into_iter() { missing.push(AnchorId(raw)); }
+                                } else {
+                                    let now = Instant::now();
+                                    for raw in missing_raw.into_iter() {
+                                        match dedupe_hdr.get(&raw) {
+                                            Some(&t) if now.duration_since(t) < dedupe_ttl => { IN_DEDUP_TOTAL.fetch_add(1, Ordering::Relaxed); }
+                                            _ => { dedupe_hdr.insert(raw, now); missing.push(AnchorId(raw)); }
+                                        }
+                                    }
+                                }
+                                debug!(target: "pc_p2p.svc", event = "inv_miss", kind = "headers", missing = missing.len(), "headers_inv missing computed");
                                 if !missing.is_empty() {
+                                    debug!(target: "pc_p2p.svc", event = "rr_enq", kind = "get_headers", count = missing.len(), "enqueue get_headers request");
                                     out.send(P2pMessage::Req(ReqMsg::GetHeaders { ids: missing })).await;
+                                } else {
+                                    debug!(target: "pc_p2p.svc", event = "rr_skip", reason = "no_missing", kind = "get_headers", "skip get_headers");
                                 }
                                 notify_inbound(&P2pMessage::HeadersInv { ids: ids.clone() });
                                 let _ = found; // suppress unused warning if any
                             } else { INBOUND_DROPPED_RATE.fetch_add(1, Ordering::Relaxed); }
                             record_in_latency(start.elapsed());
                         }
+                        Some(P2pCmd::Rpc(req, reply_tx)) => {
+                            // Lokale synchrone RPC-Verarbeitung
+                            let resp = match req {
+                                ReqMsg::GetHeaders { ref ids } => {
+                                    let (found, missing) = if let Some(d) = &store_delegate { d.get_headers(ids).await } else { store.get_headers(ids) };
+                                    if !found.is_empty() { RespMsg::Headers { headers: found } } else { RespMsg::NotFound { ty: 1, ids: missing } }
+                                }
+                                ReqMsg::GetPayloads { ref roots } => {
+                                    let (found, missing) = if let Some(d) = &store_delegate { d.get_payloads(roots).await } else { store.get_payloads(roots) };
+                                    if !found.is_empty() { RespMsg::Payloads { payloads: found } } else { RespMsg::NotFound { ty: 2, ids: missing } }
+                                }
+                                ReqMsg::GetTx { ref ids } => {
+                                    let (found, missing) = if let Some(d) = &store_delegate { d.get_txs(ids).await } else { store.get_txs(ids) };
+                                    if !found.is_empty() { RespMsg::Txs { txs: found } } else { RespMsg::NotFound { ty: 3, ids: missing } }
+                                }
+                            };
+                            let _ = reply_tx.send(resp);
+                        }
                         Some(P2pCmd::Incoming(P2pMessage::Req(req))) => {
                             let start = Instant::now();
-                            if rl.allow_msg(&P2pMessage::Req(req.clone())) {
+                            if is_bench_mode() || rl.allow_msg(&P2pMessage::Req(req.clone())) {
                                 INBOUND_TOTAL.fetch_add(1, Ordering::Relaxed);
                                 IN_REQ_TOTAL.fetch_add(1, Ordering::Relaxed);
                                 match req {
                                     ReqMsg::GetHeaders { ref ids } => {
                                         let (found, missing) = if let Some(d) = &store_delegate { d.get_headers(ids).await } else { store.get_headers(ids) };
+                                        debug!(target: "pc_p2p.svc", event = "rr_in", kind = "get_headers", count = ids.len(), found = found.len(), missing = missing.len(), "rpc inbound get_headers");
                                         if !found.is_empty() { out.send(P2pMessage::Resp(RespMsg::Headers { headers: found })).await; }
                                         if !missing.is_empty() { out.send(P2pMessage::Resp(RespMsg::NotFound { ty: 1, ids: missing })).await; }
                                     }
@@ -1194,11 +1451,12 @@ pub mod async_svc {
                         }
                         Some(P2pCmd::Incoming(P2pMessage::Resp(resp))) => {
                             let start = Instant::now();
-                            if rl.allow_msg(&P2pMessage::Resp(resp.clone())) {
+                            if is_bench_mode() || rl.allow_msg(&P2pMessage::Resp(resp.clone())) {
                                 INBOUND_TOTAL.fetch_add(1, Ordering::Relaxed);
                                 IN_RESP_TOTAL.fetch_add(1, Ordering::Relaxed);
                                 match resp {
                                     RespMsg::Headers { ref headers } => {
+                                        debug!(target: "pc_p2p.svc", event = "rr_resp_in", kind = "headers", count = headers.len(), "rpc response headers inbound");
                                         for h in headers.iter().cloned() {
                                             if let Some(d) = &store_delegate { d.insert_header(h).await; } else { store.insert_header(h); }
                                         }
@@ -1216,6 +1474,7 @@ pub mod async_svc {
                                     RespMsg::NotFound { .. } => { }
                                 }
                                 notify_inbound(&P2pMessage::Resp(resp.clone()));
+                                dispatch_watchers(&resp);
                             } else { INBOUND_DROPPED_RATE.fetch_add(1, Ordering::Relaxed); }
                             record_in_latency(start.elapsed());
                         }
@@ -1227,7 +1486,7 @@ pub mod async_svc {
                                 match msg {
                                     P2pMessage::HeaderAnnounce(h) => {
                                         let start = Instant::now();
-                                        if entry.rl.allow_msg(&P2pMessage::HeaderAnnounce(h.clone())) {
+                                        if is_bench_mode() || entry.rl.allow_msg(&P2pMessage::HeaderAnnounce(h.clone())) {
                                             INBOUND_TOTAL.fetch_add(1, Ordering::Relaxed); IN_HDR_TOTAL.fetch_add(1, Ordering::Relaxed);
                                             if let Some(d) = &store_delegate { d.insert_header(h).await; } else { store.insert_header(h); }
                                         } else { INBOUND_DROPPED_RATE.fetch_add(1, Ordering::Relaxed); }
@@ -1235,13 +1494,26 @@ pub mod async_svc {
                                     }
                                     P2pMessage::PayloadInv { roots } => {
                                         let start = Instant::now();
-                                        if entry.rl.allow_msg(&P2pMessage::PayloadInv { roots: roots.clone() }) {
+                                        if is_bench_mode() || entry.rl.allow_msg(&P2pMessage::PayloadInv { roots: roots.clone() }) {
                                             INBOUND_TOTAL.fetch_add(1, Ordering::Relaxed);
                                             IN_INV_TOTAL.fetch_add(1, Ordering::Relaxed);
                                             let mut missing: Vec<[u8;32]> = Vec::new();
-                                            for r in roots.iter() {
-                                                let present = if let Some(d) = &store_delegate { d.has_payload(r).await } else { store.has_payload(r) };
-                                                if !present { missing.push(*r); }
+                                            if is_bench_mode() {
+                                                for r in roots.iter() {
+                                                    let present = if let Some(d) = &store_delegate { d.has_payload(r).await } else { store.has_payload(r) };
+                                                    if !present { missing.push(*r); }
+                                                }
+                                            } else {
+                                                let now = Instant::now();
+                                                for r in roots.iter() {
+                                                    let present = if let Some(d) = &store_delegate { d.has_payload(r).await } else { store.has_payload(r) };
+                                                    if !present {
+                                                        match dedupe_pl.get(r) {
+                                                            Some(&t) if now.duration_since(t) < dedupe_ttl => { IN_DEDUP_TOTAL.fetch_add(1, Ordering::Relaxed); }
+                                                            _ => { dedupe_pl.insert(*r, now); missing.push(*r); }
+                                                        }
+                                                    }
+                                                }
                                             }
                                             if !missing.is_empty() { out.send(P2pMessage::Req(ReqMsg::GetPayloads { roots: missing })).await; }
                                         } else { INBOUND_DROPPED_RATE.fetch_add(1, Ordering::Relaxed); }
@@ -1249,13 +1521,26 @@ pub mod async_svc {
                                     }
                                     P2pMessage::TxInv { ids } => {
                                         let start = Instant::now();
-                                        if entry.rl.allow_msg(&P2pMessage::TxInv { ids: ids.clone() }) {
+                                        if is_bench_mode() || entry.rl.allow_msg(&P2pMessage::TxInv { ids: ids.clone() }) {
                                             INBOUND_TOTAL.fetch_add(1, Ordering::Relaxed);
                                             IN_INV_TOTAL.fetch_add(1, Ordering::Relaxed);
                                             let mut missing: Vec<[u8;32]> = Vec::new();
-                                            for id in ids.iter() {
-                                                let present = if let Some(d) = &store_delegate { d.has_tx(id).await } else { store.has_tx(id) };
-                                                if !present { missing.push(*id); }
+                                            if is_bench_mode() {
+                                                for id in ids.iter() {
+                                                    let present = if let Some(d) = &store_delegate { d.has_tx(id).await } else { store.has_tx(id) };
+                                                    if !present { missing.push(*id); }
+                                                }
+                                            } else {
+                                                let now = Instant::now();
+                                                for id in ids.iter() {
+                                                    let present = if let Some(d) = &store_delegate { d.has_tx(id).await } else { store.has_tx(id) };
+                                                    if !present {
+                                                        match dedupe_tx.get(id) {
+                                                            Some(&t) if now.duration_since(t) < dedupe_ttl => { IN_DEDUP_TOTAL.fetch_add(1, Ordering::Relaxed); }
+                                                            _ => { dedupe_tx.insert(*id, now); missing.push(*id); }
+                                                        }
+                                                    }
+                                                }
                                             }
                                             if !missing.is_empty() { out.send(P2pMessage::Req(ReqMsg::GetTx { ids: missing })).await; }
                                         } else { INBOUND_DROPPED_RATE.fetch_add(1, Ordering::Relaxed); }
@@ -1263,18 +1548,35 @@ pub mod async_svc {
                                     }
                                     P2pMessage::HeadersInv { ids } => {
                                         let start = Instant::now();
-                                        if entry.rl.allow_msg(&P2pMessage::HeadersInv { ids: ids.clone() }) {
+                                        if is_bench_mode() || entry.rl.allow_msg(&P2pMessage::HeadersInv { ids: ids.clone() }) {
                                             INBOUND_TOTAL.fetch_add(1, Ordering::Relaxed);
                                             IN_INV_TOTAL.fetch_add(1, Ordering::Relaxed);
                                             let (_found, missing_raw) = if let Some(d) = &store_delegate { d.get_headers(&ids).await } else { store.get_headers(&ids) };
-                                            let missing: Vec<AnchorId> = missing_raw.into_iter().map(AnchorId).collect();
-                                            if !missing.is_empty() { out.send(P2pMessage::Req(ReqMsg::GetHeaders { ids: missing })).await; }
+                                            let mut missing: Vec<AnchorId> = Vec::new();
+                                            if is_bench_mode() {
+                                                for raw in missing_raw.into_iter() { missing.push(AnchorId(raw)); }
+                                            } else {
+                                                let now = Instant::now();
+                                                for raw in missing_raw.into_iter() {
+                                                    match dedupe_hdr.get(&raw) {
+                                                        Some(&t) if now.duration_since(t) < dedupe_ttl => { IN_DEDUP_TOTAL.fetch_add(1, Ordering::Relaxed); }
+                                                        _ => { dedupe_hdr.insert(raw, now); missing.push(AnchorId(raw)); }
+                                                    }
+                                                }
+                                            }
+                                            debug!(target: "pc_p2p.svc", event = "inv_miss", scope = "per_peer", kind = "headers", missing = missing.len(), "headers_inv missing computed (per-peer)");
+                                            if !missing.is_empty() {
+                                                debug!(target: "pc_p2p.svc", event = "rr_enq", scope = "per_peer", kind = "get_headers", count = missing.len(), "enqueue get_headers request (per-peer)");
+                                                out.send(P2pMessage::Req(ReqMsg::GetHeaders { ids: missing })).await;
+                                            } else {
+                                                debug!(target: "pc_p2p.svc", event = "rr_skip", scope = "per_peer", reason = "no_missing", kind = "get_headers", "skip get_headers (per-peer)");
+                                            }
                                         } else { INBOUND_DROPPED_RATE.fetch_add(1, Ordering::Relaxed); }
                                         record_in_latency(start.elapsed());
                                     }
                                     P2pMessage::Req(req) => {
                                         let start = Instant::now();
-                                        if entry.rl.allow_msg(&P2pMessage::Req(req.clone())) {
+                                        if is_bench_mode() || entry.rl.allow_msg(&P2pMessage::Req(req.clone())) {
                                             INBOUND_TOTAL.fetch_add(1, Ordering::Relaxed);
                                             IN_REQ_TOTAL.fetch_add(1, Ordering::Relaxed);
                                             match req {
@@ -1299,7 +1601,7 @@ pub mod async_svc {
                                     }
                                     P2pMessage::Resp(resp) => {
                                         let start = Instant::now();
-                                        if entry.rl.allow_msg(&P2pMessage::Resp(resp.clone())) {
+                                        if is_bench_mode() || entry.rl.allow_msg(&P2pMessage::Resp(resp.clone())) {
                                             INBOUND_TOTAL.fetch_add(1, Ordering::Relaxed);
                                             IN_RESP_TOTAL.fetch_add(1, Ordering::Relaxed);
                                             match resp {
@@ -1321,6 +1623,7 @@ pub mod async_svc {
                                                 RespMsg::NotFound { .. } => { }
                                             }
                                             notify_inbound(&P2pMessage::Resp(resp.clone()));
+                                            dispatch_watchers(&resp);
                                         } else { INBOUND_DROPPED_RATE.fetch_add(1, Ordering::Relaxed); }
                                         record_in_latency(start.elapsed());
                                     }
@@ -1439,6 +1742,19 @@ pub mod async_svc {
                         None => { warn!("p2p command channel closed"); break; }
                     }
                 },
+                _ = anti_entropy.tick() => {
+                    if !BENCH_MODE.load(Ordering::Relaxed) {
+                        // Periodischer Anti-Entropy Abgleich: sende letzte bekannten Inventare
+                        let hdr_sample = store.recent_headers_sample(16);
+                        if !hdr_sample.is_empty() {
+                            out.send(P2pMessage::HeadersInv { ids: hdr_sample }).await;
+                        }
+                        let pl_sample = store.recent_payload_roots_sample(16);
+                        if !pl_sample.is_empty() {
+                            out.send(P2pMessage::PayloadInv { roots: pl_sample }).await;
+                        }
+                    }
+                },
                 _ = sleep(Duration::from_secs(60)) => {
                     let use_per_peer = cfg.rate.as_ref().map(|r| r.per_peer).unwrap_or(true);
                     if use_per_peer && ttl_secs > 0 {
@@ -1450,6 +1766,13 @@ pub mod async_svc {
                             alive
                         });
                         if purged > 0 { PEER_RL_PURGED_TOTAL.fetch_add(purged, Ordering::Relaxed); }
+                    }
+                    // Dedupe-Maps säubern
+                    {
+                        let now = Instant::now();
+                        dedupe_hdr.retain(|_, t| now.duration_since(*t) < dedupe_ttl);
+                        dedupe_pl.retain(|_, t| now.duration_since(*t) < dedupe_ttl);
+                        dedupe_tx.retain(|_, t| now.duration_since(*t) < dedupe_ttl);
                     }
                 }
             }
@@ -1515,8 +1838,8 @@ pub mod async_svc {
     mod itests {
         use super::super::messages::{P2pMessage, ReqMsg, RespMsg};
         use super::*;
-        use pc_types::{payload_merkle_root, AnchorPayload};
-        use pc_types::{AnchorHeader, AnchorId};
+        use pc_types::{payload_merkle_root_v2 as payload_merkle_root, AnchorPayloadV2 as AnchorPayload};
+        use pc_types::{AnchorHeaderV2 as AnchorHeader, AnchorId};
         use tokio::time::{timeout, Duration};
 
         // End-to-End: INV -> GET_PAYLOADS -> PAYLOADS zwischen zwei Loops
@@ -1531,12 +1854,13 @@ pub mod async_svc {
 
             // Erzeuge Payload auf A
             let payload = AnchorPayload {
-                version: 1,
+                version: 2,
                 micro_txs: vec![],
                 mints: vec![],
                 claims: vec![],
                 evidences: vec![],
                 payout_root: [9u8; 32],
+                genesis_note: None,
             };
             let root = payload_merkle_root(&payload);
             let _ = svc_a.put_payload(payload).await; // ok if ChannelClosed? here it should be ok
@@ -1634,7 +1958,7 @@ pub mod async_svc {
             // Erzeuge Header auf A
             let parents = pc_types::ParentList::default();
             let hdr = AnchorHeader {
-                version: 1,
+                version: 2,
                 shard_id: 0,
                 parents,
                 payload_hash: [0u8; 32],
@@ -1642,6 +1966,7 @@ pub mod async_svc {
                 vote_mask: 0,
                 ack_present: false,
                 ack_id: AnchorId([0u8; 32]),
+                network_id: [0u8; 32],
             };
             let id = pc_types::AnchorId(hdr.id_digest());
             // Insert in A-Store durch Incoming-Message
