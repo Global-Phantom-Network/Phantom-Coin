@@ -33,15 +33,16 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Build benches (no run)
-        run: cargo bench --no-run -q
+        run: cargo bench --no-run -q -p pc-p2p --features "async libp2p"
 
       - name: Run benches (async libp2p)
-        run: cargo bench --features "async libp2p"
+        run: cargo bench -p pc-p2p --features "async libp2p"
 
       - name: Aggregate results
         run: cargo run -q -p pc-p2p --bin bench_agg
 
       - name: Upload artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: benches-libp2p-artifacts
@@ -54,9 +55,6 @@ jobs:
   benches-quic:
     name: Benches (async + quic)
     runs-on: ubuntu-latest
-    needs: benches-libp2p
-    # Set to true if QUIC deps are flaky in CI; artifacts will still upload from previous job.
-    continue-on-error: true
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -74,15 +72,16 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Build benches (no run)
-        run: cargo bench --no-run -q
+        run: cargo bench --no-run -q -p pc-p2p --features "async quic"
 
       - name: Run benches (async quic)
-        run: cargo bench --features "async quic"
+        run: cargo bench -p pc-p2p --features "async quic"
 
       - name: Aggregate results
         run: cargo run -q -p pc-p2p --bin bench_agg
 
       - name: Upload artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: benches-quic-artifacts
