@@ -20,7 +20,7 @@ jobs:
   benches-libp2p:
     name: Benches (async + libp2p)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -42,8 +42,8 @@ jobs:
 
       - name: Run benches (async libp2p)
         run: |
-          cargo bench -p pc-p2p --features "async libp2p" --bench p2p_libp2p_rpc -- --measurement-time 10 --sample-size 8 --warm-up-time 2
-          cargo bench -p pc-p2p --features "async libp2p" --bench p2p_libp2p_e2e -- --measurement-time 10 --sample-size 8 --warm-up-time 2
+          cargo bench -p pc-p2p --features "async libp2p" --bench p2p_libp2p_rpc -- --measurement-time 10 --sample-size 10 --warm-up-time 2
+          cargo bench -p pc-p2p --features "async libp2p" --bench p2p_libp2p_e2e -- --measurement-time 10 --sample-size 10 --warm-up-time 2
 
       - name: Aggregate results
         run: cargo run -q -p pc-p2p --bin bench_agg
@@ -62,7 +62,7 @@ jobs:
   benches-quic:
     name: Benches (async + quic)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -83,7 +83,7 @@ jobs:
         run: cargo bench --no-run -q -p pc-p2p --features "async quic"
 
       - name: Run benches (async quic)
-        run: cargo bench -p pc-p2p --features "async quic" --bench p2p_quic_bench -- --measurement-time 10 --sample-size 8 --warm-up-time 2
+        run: cargo bench -p pc-p2p --features "async quic" --bench p2p_quic_bench -- --measurement-time 10 --sample-size 10 --warm-up-time 2
 
       - name: Aggregate results
         run: cargo run -q -p pc-p2p --bin bench_agg
