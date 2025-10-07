@@ -1310,6 +1310,20 @@ pub mod async_svc {
                                 IN_HDR_TOTAL.fetch_add(1, Ordering::Relaxed);
                                 let h_clone = h.clone();
                                 if let Some(d) = &store_delegate { d.insert_header(h).await; } else { store.insert_header(h); }
+                                // DA-Gating: fehlende Payloads proaktiv anfordern (pull-then-vote)
+                                let root = h_clone.payload_hash;
+                                let present = if let Some(d) = &store_delegate { d.has_payload(&root).await } else { store.has_payload(&root) };
+                                if !present {
+                                    if is_bench_mode() {
+                                        out.send(P2pMessage::Req(ReqMsg::GetPayloads { roots: vec![root] })).await;
+                                    } else {
+                                        let now = Instant::now();
+                                        match dedupe_pl.get(&root) {
+                                            Some(&t) if now.duration_since(t) < dedupe_ttl => { IN_DEDUP_TOTAL.fetch_add(1, Ordering::Relaxed); }
+                                            _ => { dedupe_pl.insert(root, now); out.send(P2pMessage::Req(ReqMsg::GetPayloads { roots: vec![root] })).await; }
+                                        }
+                                    }
+                                }
                                 notify_inbound(&P2pMessage::HeaderAnnounce(h_clone));
                             } else { INBOUND_DROPPED_RATE.fetch_add(1, Ordering::Relaxed); }
                             record_in_latency(start.elapsed());
@@ -1460,6 +1474,28 @@ pub mod async_svc {
                                         for h in headers.iter().cloned() {
                                             if let Some(d) = &store_delegate { d.insert_header(h).await; } else { store.insert_header(h); }
                                         }
+                                        // DA-Gating: nach Insert fehlende Payloads ermitteln und anfordern
+                                        let mut missing: Vec<[u8;32]> = Vec::new();
+                                        if is_bench_mode() {
+                                            for h in headers.iter() {
+                                                let root = h.payload_hash;
+                                                let present = if let Some(d) = &store_delegate { d.has_payload(&root).await } else { store.has_payload(&root) };
+                                                if !present { missing.push(root); }
+                                            }
+                                        } else {
+                                            let now = Instant::now();
+                                            for h in headers.iter() {
+                                                let root = h.payload_hash;
+                                                let present = if let Some(d) = &store_delegate { d.has_payload(&root).await } else { store.has_payload(&root) };
+                                                if !present {
+                                                    match dedupe_pl.get(&root) {
+                                                        Some(&t) if now.duration_since(t) < dedupe_ttl => { IN_DEDUP_TOTAL.fetch_add(1, Ordering::Relaxed); }
+                                                        _ => { dedupe_pl.insert(root, now); missing.push(root); }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        if !missing.is_empty() { out.send(P2pMessage::Req(ReqMsg::GetPayloads { roots: missing })).await; }
                                     },
                                     RespMsg::Payloads { ref payloads } => {
                                         for p in payloads.iter().cloned() {
@@ -1488,7 +1524,21 @@ pub mod async_svc {
                                         let start = Instant::now();
                                         if is_bench_mode() || entry.rl.allow_msg(&P2pMessage::HeaderAnnounce(h.clone())) {
                                             INBOUND_TOTAL.fetch_add(1, Ordering::Relaxed); IN_HDR_TOTAL.fetch_add(1, Ordering::Relaxed);
+                                            let root = h.payload_hash;
                                             if let Some(d) = &store_delegate { d.insert_header(h).await; } else { store.insert_header(h); }
+                                            // DA-Gating: fehlende Payloads proaktiv anfordern (per-Peer-Rate)
+                                            let present = if let Some(d) = &store_delegate { d.has_payload(&root).await } else { store.has_payload(&root) };
+                                            if !present {
+                                                if is_bench_mode() {
+                                                    out.send(P2pMessage::Req(ReqMsg::GetPayloads { roots: vec![root] })).await;
+                                                } else {
+                                                    let now = Instant::now();
+                                                    match dedupe_pl.get(&root) {
+                                                        Some(&t) if now.duration_since(t) < dedupe_ttl => { IN_DEDUP_TOTAL.fetch_add(1, Ordering::Relaxed); }
+                                                        _ => { dedupe_pl.insert(root, now); out.send(P2pMessage::Req(ReqMsg::GetPayloads { roots: vec![root] })).await; }
+                                                    }
+                                                }
+                                            }
                                         } else { INBOUND_DROPPED_RATE.fetch_add(1, Ordering::Relaxed); }
                                         record_in_latency(start.elapsed());
                                     }
@@ -2054,6 +2104,171 @@ pub mod async_svc {
             let _ = svc_a.shutdown().await;
             let _ = svc_b.shutdown().await;
             let _ = handle_a.await;
+            let _ = handle_b.await;
+        }
+
+        // DA-Gating: HeaderAnnounce mit fehlendem Payload löst GetPayloads aus
+        #[tokio::test]
+        async fn header_announce_triggers_getpayloads() {
+            let cfg = P2pConfig { max_peers: 8, rate: None };
+            let (_svc_a, _out_a, handle_a) = spawn(cfg.clone());
+            let (svc_b, mut out_b, handle_b) = spawn(cfg.clone());
+
+            // Header mit unbekanntem payload_hash
+            let parents = pc_types::ParentList::default();
+            let hdr = AnchorHeader { version: 2, shard_id: 0, parents, payload_hash: [5u8; 32], creator_index: 1, vote_mask: 0, ack_present: false, ack_id: AnchorId([0u8; 32]), network_id: [0u8; 32] };
+
+            // Sende Announce an B
+            let _ = svc_b.send_message(P2pMessage::HeaderAnnounce(hdr)).await;
+
+            // Erwartung: GetPayloads auf out_b
+            let req = timeout(Duration::from_secs(1), async {
+                loop {
+                    if let Some(msg) = out_b.recv().await {
+                        if let P2pMessage::Req(ReqMsg::GetPayloads { roots }) = msg { return Some(roots); }
+                    } else { return None; }
+                }
+            }).await.ok().flatten().unwrap_or_default();
+            assert_eq!(req, vec![[5u8; 32]]);
+
+            // Shutdown
+            let _ = _svc_a.shutdown().await;
+            let _ = svc_b.shutdown().await;
+            let _ = handle_a.await;
+            let _ = handle_b.await;
+        }
+
+        // DA-Gating: Dedupe verhindert mehrfaches GetPayloads für selben Root in kurzer Zeit
+        #[tokio::test]
+        async fn header_announce_dedupe_only_once() {
+            let cfg = P2pConfig { max_peers: 8, rate: None };
+            let (svc_b, mut out_b, handle_b) = spawn(cfg.clone());
+
+            let parents = pc_types::ParentList::default();
+            let hdr = AnchorHeader { version: 2, shard_id: 0, parents, payload_hash: [7u8; 32], creator_index: 1, vote_mask: 0, ack_present: false, ack_id: AnchorId([0u8; 32]), network_id: [0u8; 32] };
+
+            // Zwei Announce kurz hintereinander
+            let _ = svc_b.send_message(P2pMessage::HeaderAnnounce(hdr.clone())).await;
+            let _ = svc_b.send_message(P2pMessage::HeaderAnnounce(hdr.clone())).await;
+
+            // Sammle kurzzeitig alle Outbox-Messages und zähle GetPayloads
+            let mut got_roots: Vec<[u8; 32]> = Vec::new();
+            let _ = timeout(Duration::from_millis(500), async {
+                while let Some(msg) = out_b.recv().await {
+                    if let P2pMessage::Req(ReqMsg::GetPayloads { roots }) = msg { got_roots.extend(roots); }
+                }
+            }).await; // Timeout erwartet -> ignorieren
+
+            // Es darf nur ein GetPayloads für den Root geben
+            let count = got_roots.iter().filter(|r| **r == [7u8; 32]).count();
+            assert!(count >= 1);
+            assert_eq!(count, 1);
+
+            let _ = svc_b.shutdown().await;
+            let _ = handle_b.await;
+        }
+
+        // Watcher: watch_payload(root) löst aus, wenn PAYLOADS-Resp ankommt
+        #[tokio::test]
+        async fn watch_payload_resolves_on_payloads_resp() {
+            let cfg = P2pConfig { max_peers: 8, rate: None };
+            let (svc, _out, handle) = spawn(cfg.clone());
+
+            // Baue Payload und Root
+            let payload = AnchorPayload { version: 2, micro_txs: vec![], mints: vec![], claims: vec![], evidences: vec![], payout_root: [1u8;32], genesis_note: None };
+            let root = payload_merkle_root(&payload);
+
+            // Starte Watcher
+            let rx = super::watch_payload(root);
+
+            // Sende PAYLOADS-Resp
+            let _ = svc.send_message(P2pMessage::Resp(RespMsg::Payloads { payloads: vec![payload] })).await;
+
+            // Erwartung: Watcher liefert innerhalb Timeout
+            let got = tokio::time::timeout(Duration::from_secs(1), rx).await.ok().and_then(|r| r.ok());
+            match got {
+                Some(RespMsg::Payloads { payloads }) => {
+                    assert_eq!(payloads.len(), 1);
+                    let r2 = payload_merkle_root(&payloads[0]);
+                    assert_eq!(r2, root);
+                }
+                _ => panic!("watch_payload did not resolve"),
+            }
+
+            let _ = svc.shutdown().await;
+            let _ = handle.await;
+        }
+
+        // Watcher: Timeout wenn keine Lieferung erfolgt (Nichtlieferung)
+        #[tokio::test]
+        async fn watch_payload_times_out_on_non_delivery() {
+            let _cfg = P2pConfig { max_peers: 8, rate: None };
+            // Kein Service nötig, wir nutzen nur den Watcher ohne Response
+            let root = [2u8; 32];
+            let rx = super::watch_payload(root);
+            // Erwartung: Timeout tritt ein (keine Lieferung)
+            let res = tokio::time::timeout(Duration::from_millis(150), rx).await;
+            assert!(res.is_err());
+        }
+
+        // Watcher: Spätlieferung (erst nach kurzer Verzögerung geliefert)
+        #[tokio::test]
+        async fn watch_payload_resolves_on_late_delivery() {
+            let cfg = P2pConfig { max_peers: 8, rate: None };
+            let (svc, _out, handle) = spawn(cfg.clone());
+
+            let payload = AnchorPayload { version: 2, micro_txs: vec![], mints: vec![], claims: vec![], evidences: vec![], payout_root: [3u8;32], genesis_note: None };
+            let root = payload_merkle_root(&payload);
+            let rx = super::watch_payload(root);
+
+            // Verzögerte Lieferung
+            tokio::spawn({
+                let svc2 = svc.clone();
+                let p = payload.clone();
+                async move {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    let _ = svc2.send_message(P2pMessage::Resp(RespMsg::Payloads { payloads: vec![p] })).await;
+                }
+            });
+
+            let got = tokio::time::timeout(Duration::from_secs(1), rx).await.ok().and_then(|r| r.ok());
+            match got {
+                Some(RespMsg::Payloads { payloads }) => {
+                    assert_eq!(payloads.len(), 1);
+                    let r2 = payload_merkle_root(&payloads[0]);
+                    assert_eq!(r2, root);
+                }
+                _ => panic!("late delivery watcher did not resolve"),
+            }
+
+            let _ = svc.shutdown().await;
+            let _ = handle.await;
+        }
+
+        // DA-Gating: HEADERS-Response mit fehlenden Payloads löst GetPayloads aus
+        #[tokio::test]
+        async fn headers_resp_triggers_getpayloads() {
+            let cfg = P2pConfig { max_peers: 8, rate: None };
+            let (svc_b, mut out_b, handle_b) = spawn(cfg.clone());
+
+            // Header mit unbekanntem payload_hash
+            let parents = pc_types::ParentList::default();
+            let hdr = AnchorHeader { version: 2, shard_id: 0, parents, payload_hash: [11u8; 32], creator_index: 1, vote_mask: 0, ack_present: false, ack_id: AnchorId([0u8; 32]), network_id: [0u8; 32] };
+
+            // Simuliere eingehende HEADERS-Resp
+            let _ = svc_b.send_message(P2pMessage::Resp(RespMsg::Headers { headers: vec![hdr] })).await;
+
+            // Erwartung: GetPayloads auf out_b
+            let req = timeout(Duration::from_secs(1), async {
+                loop {
+                    if let Some(msg) = out_b.recv().await {
+                        if let P2pMessage::Req(ReqMsg::GetPayloads { roots }) = msg { return Some(roots); }
+                    } else { return None; }
+                }
+            }).await.ok().flatten().unwrap_or_default();
+            assert_eq!(req, vec![[11u8; 32]]);
+
+            let _ = svc_b.shutdown().await;
             let _ = handle_b.await;
         }
     }

@@ -23,7 +23,6 @@ pub const MAX_PAYLOAD_MICROTX: usize = 4096;
 pub const MAX_PAYLOAD_MINTS: usize = 1024;
 pub const MAX_PAYLOAD_CLAIMS: usize = 1024;
 pub const MAX_PAYLOAD_EVIDENCES: usize = 256;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub struct AnchorId(pub Hash32);
 
@@ -34,6 +33,256 @@ impl Encodable for AnchorId {
     fn encoded_len(&self) -> usize {
         32
     }
+}
+// ============================
+// V2: Header/Payload mit Genesis-Bindung
+// ============================
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AnchorHeaderV2 {
+    pub version: u8,
+    pub shard_id: u16,
+    pub parents: ParentList,
+    pub payload_hash: Hash32,
+    pub creator_index: u8,
+    pub vote_mask: u64,
+    pub ack_present: bool,
+    pub ack_id: AnchorId,
+    pub network_id: Hash32,
+}
+impl Default for AnchorHeaderV2 {
+    fn default() -> Self {
+        Self {
+            version: 2,
+            shard_id: 0,
+            parents: ParentList::default(),
+            payload_hash: [0u8; 32],
+            creator_index: 0,
+            vote_mask: 0,
+            ack_present: false,
+            ack_id: AnchorId([0u8; 32]),
+            network_id: [0u8; 32],
+        }
+    }
+}
+impl Encodable for AnchorHeaderV2 {
+    fn encode<W: Write>(&self, w: &mut W) -> Result<(), CodecError> {
+        self.version.encode(w)?;
+        self.shard_id.encode(w)?;
+        self.parents.encode(w)?;
+        self.payload_hash.encode(w)?;
+        self.creator_index.encode(w)?;
+        self.vote_mask.encode(w)?;
+        self.ack_present.encode(w)?;
+        if self.ack_present { self.ack_id.encode(w)?; }
+        self.network_id.encode(w)?;
+        Ok(())
+    }
+    fn encoded_len(&self) -> usize {
+        let mut n = 0usize;
+        n += self.version.encoded_len();
+        n += self.shard_id.encoded_len();
+        n += self.parents.encoded_len();
+        n += self.payload_hash.encoded_len();
+        n += self.creator_index.encoded_len();
+        n += self.vote_mask.encoded_len();
+        n += self.ack_present.encoded_len();
+        if self.ack_present { n += self.ack_id.encoded_len(); }
+        n += self.network_id.encoded_len();
+        n
+    }
+}
+impl Decodable for AnchorHeaderV2 {
+    fn decode<R: Read>(r: &mut R) -> Result<Self, CodecError> {
+        let version = u8::decode(r)?;
+        let shard_id = u16::decode(r)?;
+        let parents = ParentList::decode(r)?;
+        let payload_hash = <[u8; 32]>::decode(r)?;
+        let creator_index = u8::decode(r)?;
+        let vote_mask = u64::decode(r)?;
+        let ack_present = bool::decode(r)?;
+        let ack_id = if ack_present { AnchorId::decode(r)? } else { AnchorId([0u8; 32]) };
+        let network_id = <[u8; 32]>::decode(r)?;
+        Ok(Self { version, shard_id, parents, payload_hash, creator_index, vote_mask, ack_present, ack_id, network_id })
+    }
+}
+
+impl AnchorHeaderV2 {
+    pub fn id_digest(&self) -> Hash32 {
+        let mut buf = Vec::with_capacity(self.encoded_len());
+        let _ = self.encode(&mut buf);
+        blake3_32(&buf)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AnchorPayloadV2 {
+    pub version: u8,
+    pub micro_txs: Vec<MicroTx>,
+    pub mints: Vec<MintEvent>,
+    pub claims: Vec<ClaimEvent>,
+    pub evidences: Vec<EvidenceEvent>,
+    pub payout_root: Hash32,
+    pub genesis_note: Option<GenesisNote>,
+}
+impl Encodable for AnchorPayloadV2 {
+    fn encode<W: Write>(&self, w: &mut W) -> Result<(), CodecError> {
+        self.version.encode(w)?;
+        self.micro_txs.encode(w)?;
+        self.mints.encode(w)?;
+        self.claims.encode(w)?;
+        self.evidences.encode(w)?;
+        self.payout_root.encode(w)?;
+        match &self.genesis_note {
+            Some(note) => { true.encode(w)?; note.encode(w)?; }
+            None => { false.encode(w)?; }
+        }
+        Ok(())
+    }
+    fn encoded_len(&self) -> usize {
+        let mut n = 0usize;
+        n += self.version.encoded_len();
+        n += self.micro_txs.encoded_len();
+        n += self.mints.encoded_len();
+        n += self.claims.encoded_len();
+        n += self.evidences.encoded_len();
+        n += self.payout_root.encoded_len();
+        n += bool::default().encoded_len();
+        if let Some(note) = &self.genesis_note { n += note.encoded_len(); }
+        n
+    }
+}
+impl Decodable for AnchorPayloadV2 {
+    fn decode<R: Read>(r: &mut R) -> Result<Self, CodecError> {
+        let version = u8::decode(r)?;
+        let micro_txs = Vec::<MicroTx>::decode(r)?;
+        let mints = Vec::<MintEvent>::decode(r)?;
+        let claims = Vec::<ClaimEvent>::decode(r)?;
+        let evidences = Vec::<EvidenceEvent>::decode(r)?;
+        let payout_root = <[u8; 32]>::decode(r)?;
+        let has_note = bool::decode(r)?;
+        let genesis_note = if has_note { Some(GenesisNote::decode(r)?) } else { None };
+        Ok(Self { version, micro_txs, mints, claims, evidences, payout_root, genesis_note })
+    }
+}
+
+/// Berechne den Payload‑Merkle‑Root für V2.
+/// Genesis-Sonderfall: Wenn `genesis_note` vorhanden ist, verwende `genesis_payload_root(note)`.
+/// Andernfalls analog V1 über alle Kategorien und den payout_root.
+pub fn payload_merkle_root_v2(payload: &AnchorPayloadV2) -> Hash32 {
+    if let Some(note) = &payload.genesis_note {
+        return genesis_payload_root(note);
+    }
+    let mut leaves: Vec<Hash32> = Vec::new();
+    for tx in &payload.micro_txs {
+        leaves.push(digest_microtx(tx));
+    }
+    for m in &payload.mints {
+        leaves.push(digest_mint(m));
+    }
+    for c in &payload.claims {
+        leaves.push(digest_claim(c));
+    }
+    for e in &payload.evidences {
+        leaves.push(digest_evidence(e));
+    }
+    leaves.push(digest_payout_root(&payload.payout_root));
+    leaves.sort_unstable();
+    merkle_root_hashes(&leaves)
+}
+
+
+/// Genesis-Leaf-Digest (für A0-Sonderfall): Domain-separierter Hash über kodierte GenesisNote
+pub fn digest_genesis_leaf(note: &GenesisNote) -> Hash32 {
+    let mut enc = Vec::with_capacity(note.encoded_len());
+    let _ = note.encode(&mut enc);
+    digest_with_domain(LEAF_GENESIS, &enc)
+}
+
+/// A0-Payload-Root: Merkle-Root über genau 1 Leaf (Genesis-Leaf)
+pub fn genesis_payload_root(note: &GenesisNote) -> Hash32 {
+    let leaf = digest_genesis_leaf(note);
+    merkle_root_hashes(&[leaf])
+}
+// ============================
+// Genesis Note (A0)
+// ============================
+// Domain-Tag für Genesis-Note-Commitment
+const GENESIS_NOTE_V1: &[u8] = b"pc:genesis:note:v1\x01";
+
+/// Netzwerk-ID wird als 32-Byte-Hash geführt
+pub type NetworkId = Hash32;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GenesisParams {
+    pub shards_initial: u16,
+    pub committee_k: u8,
+    pub txs_per_payload: u16,
+    pub features: u64,
+}
+impl Encodable for GenesisParams {
+    fn encode<W: Write>(&self, w: &mut W) -> Result<(), CodecError> {
+        self.shards_initial.encode(w)?;
+        self.committee_k.encode(w)?;
+        self.txs_per_payload.encode(w)?;
+        self.features.encode(w)?;
+        Ok(())
+    }
+    fn encoded_len(&self) -> usize {
+        self.shards_initial.encoded_len()
+            + self.committee_k.encoded_len()
+            + self.txs_per_payload.encoded_len()
+            + self.features.encoded_len()
+    }
+}
+impl Decodable for GenesisParams {
+    fn decode<R: Read>(r: &mut R) -> Result<Self, CodecError> {
+        Ok(Self {
+            shards_initial: u16::decode(r)?,
+            committee_k: u8::decode(r)?,
+            txs_per_payload: u16::decode(r)?,
+            features: u64::decode(r)?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GenesisNote {
+    pub version: u8,              // 0x00 (v1)
+    pub network_name: Vec<u8>,    // UTF-8, <=32 Bytes empfohlen
+    pub seed: [u8; 32],
+    pub params: GenesisParams,
+}
+impl Encodable for GenesisNote {
+    fn encode<W: Write>(&self, w: &mut W) -> Result<(), CodecError> {
+        self.version.encode(w)?;
+        self.network_name.encode(w)?; // Vec<u8>
+        self.seed.encode(w)?;
+        self.params.encode(w)?;
+        Ok(())
+    }
+    fn encoded_len(&self) -> usize {
+        self.version.encoded_len()
+            + self.network_name.encoded_len()
+            + 32
+            + self.params.encoded_len()
+    }
+}
+impl Decodable for GenesisNote {
+    fn decode<R: Read>(r: &mut R) -> Result<Self, CodecError> {
+        Ok(Self {
+            version: u8::decode(r)?,
+            network_name: Vec::<u8>::decode(r)?,
+            seed: <[u8; 32]>::decode(r)?,
+            params: GenesisParams::decode(r)?,
+        })
+    }
+}
+
+pub fn digest_genesis_note(note: &GenesisNote) -> Hash32 {
+    let mut enc = Vec::with_capacity(note.encoded_len());
+    let _ = note.encode(&mut enc);
+    digest_with_domain(GENESIS_NOTE_V1, &enc)
 }
 impl Decodable for AnchorId {
     fn decode<R: Read>(r: &mut R) -> Result<Self, CodecError> {
@@ -116,6 +365,7 @@ const LEAF_MINT: &[u8] = b"pc:leaf:mint:v1\x01";
 const LEAF_CLAIM: &[u8] = b"pc:leaf:claim:v1\x01";
 const LEAF_EVID: &[u8] = b"pc:leaf:evidence:v1\x01";
 const LEAF_PAYOUT_ROOT: &[u8] = b"pc:leaf:payout_root:v1\x01";
+const LEAF_GENESIS: &[u8] = b"pc:leaf:genesis_note:v1\x01";
 
 fn digest_with_domain(domain: &[u8], bytes: &[u8]) -> Hash32 {
     let mut buf = Vec::with_capacity(domain.len() + bytes.len());
@@ -817,6 +1067,29 @@ pub fn validate_mint_sanity(m: &MintEvent) -> Result<(), &'static str> {
 }
 
 pub fn validate_payload_sanity(p: &AnchorPayload) -> Result<(), &'static str> {
+    if p.micro_txs.len() > MAX_PAYLOAD_MICROTX {
+        return Err("too many micro_txs");
+    }
+    if p.mints.len() > MAX_PAYLOAD_MINTS {
+        return Err("too many mints");
+    }
+    if p.claims.len() > MAX_PAYLOAD_CLAIMS {
+        return Err("too many claims");
+    }
+    if p.evidences.len() > MAX_PAYLOAD_EVIDENCES {
+        return Err("too many evidences");
+    }
+    for tx in &p.micro_txs {
+        validate_microtx_sanity(tx)?;
+    }
+    for m in &p.mints {
+        validate_mint_sanity(m)?;
+    }
+    Ok(())
+}
+
+/// Sanity-Checks für AnchorPayloadV2 (analog V1; genesis_note wird nicht validiert)
+pub fn validate_payload_sanity_v2(p: &AnchorPayloadV2) -> Result<(), &'static str> {
     if p.micro_txs.len() > MAX_PAYLOAD_MICROTX {
         return Err("too many micro_txs");
     }
