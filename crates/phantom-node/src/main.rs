@@ -87,14 +87,14 @@ fn global_state(mempool_dir: &str) -> &'static Mutex<UtxoState<RocksDbBackend>> 
     STATE.get_or_init(|| {
         let path = std::path::Path::new(mempool_dir).join("state.rocks");
         let db = RocksDbBackend::open(&path.to_string_lossy()).expect("open rocksdb state");
-        Mutex::new(UtxoState::new_with_index(db))
+        Mutex::new(UtxoState::new(db))
     })
 }
 
 #[cfg(not(feature = "rocksdb"))]
 fn global_state(_mempool_dir: &str) -> &'static Mutex<UtxoState<InMemoryBackend>> {
     static STATE: OnceCell<Mutex<UtxoState<InMemoryBackend>>> = OnceCell::new();
-    STATE.get_or_init(|| Mutex::new(UtxoState::new_with_index(InMemoryBackend::new())))
+    STATE.get_or_init(|| Mutex::new(UtxoState::new(InMemoryBackend::new())))
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]
@@ -4601,10 +4601,10 @@ fn run_p2p_quic_listen(args: &P2pQuicListenArgs) -> Result<()> {
             let mut st = {
                 let _ = std::fs::create_dir_all(&_utxo_path);
                 let backend = pc_state::RocksDbBackend::open(&_utxo_path).expect("open rocksdb utxo");
-                UtxoState::new_with_index(backend)
+                UtxoState::new(backend)
             };
             #[cfg(not(feature = "rocksdb"))]
-            let mut st = UtxoState::new_with_index(InMemoryBackend::new());
+            let mut st = UtxoState::new(InMemoryBackend::new());
             // globaler Anchor-Index für Maturity (uhrfrei, zählt final angewandte Payloads)
             let mut anchor_index: AnchorIndex = match std::fs::read_to_string(&anchor_index_path) {
                 Ok(s) => s.trim().parse::<u64>().unwrap_or(0),

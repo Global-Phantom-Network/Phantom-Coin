@@ -2,7 +2,14 @@
 #![forbid(unsafe_code)]
 use anyhow::{anyhow, Result};
 use pc_codec::{Decodable, Encodable};
-use pc_types::{payload_merkle_root, AnchorHeader, AnchorPayload};
+use pc_types::{
+    payload_merkle_root,
+    payload_merkle_root_v2,
+    AnchorHeader,
+    AnchorHeaderV2,
+    AnchorPayload,
+    AnchorPayloadV2,
+};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -117,6 +124,45 @@ impl FileStore {
         }
         let mut slice = &Self::read_all(&path)?[..];
         let p = AnchorPayload::decode(&mut slice)?;
+        Ok(Some(p))
+    }
+    
+    // V2-Support: Header/Payroll V2 speichern/lesen
+    pub fn put_header_v2(&self, h: &AnchorHeaderV2) -> Result<[u8; 32]> {
+        let id = h.id_digest();
+        let fname = format!("{}.bin", Self::hex32(&id));
+        let mut buf = Vec::with_capacity(h.encoded_len());
+        h.encode(&mut buf)?;
+        Self::write_atomic(&self.headers_dir, &fname, &buf, self.fsync)?;
+        Ok(id)
+    }
+
+    pub fn get_header_v2(&self, id: &[u8; 32]) -> Result<Option<AnchorHeaderV2>> {
+        let path = self.headers_dir.join(format!("{}.bin", Self::hex32(id)));
+        if !path.exists() {
+            return Ok(None);
+        }
+        let mut slice = &Self::read_all(&path)?[..];
+        let h = AnchorHeaderV2::decode(&mut slice)?;
+        Ok(Some(h))
+    }
+
+    pub fn put_payload_v2(&self, p: &AnchorPayloadV2) -> Result<[u8; 32]> {
+        let root = payload_merkle_root_v2(p);
+        let fname = format!("{}.bin", Self::hex32(&root));
+        let mut buf = Vec::with_capacity(p.encoded_len());
+        p.encode(&mut buf)?;
+        Self::write_atomic(&self.payloads_dir, &fname, &buf, self.fsync)?;
+        Ok(root)
+    }
+
+    pub fn get_payload_v2(&self, root: &[u8; 32]) -> Result<Option<AnchorPayloadV2>> {
+        let path = self.payloads_dir.join(format!("{}.bin", Self::hex32(root)));
+        if !path.exists() {
+            return Ok(None);
+        }
+        let mut slice = &Self::read_all(&path)?[..];
+        let p = AnchorPayloadV2::decode(&mut slice)?;
         Ok(Some(p))
     }
 }

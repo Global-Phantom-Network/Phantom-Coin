@@ -84,7 +84,7 @@ async fn main() -> Result<()> {
     let persist_task = tokio::spawn(async move {
         loop {
             match rx_persist.recv().await {
-                Ok(P2pMessage::HeaderAnnounce(h)) => match store.put_header(&h) {
+                Ok(P2pMessage::HeaderAnnounce(h)) => match store.put_header_v2(&h) {
                     Ok(_) => {
                         NODE_PERSIST_HEADERS_TOTAL.fetch_add(1, Ordering::Relaxed);
                     }
@@ -94,7 +94,7 @@ async fn main() -> Result<()> {
                 },
                 Ok(P2pMessage::Resp(RespMsg::Headers { headers })) => {
                     for h in headers {
-                        match store.put_header(&h) {
+                        match store.put_header_v2(&h) {
                             Ok(_) => {
                                 NODE_PERSIST_HEADERS_TOTAL.fetch_add(1, Ordering::Relaxed);
                             }
@@ -106,7 +106,7 @@ async fn main() -> Result<()> {
                 }
                 Ok(P2pMessage::Resp(RespMsg::Payloads { payloads })) => {
                     for p in payloads {
-                        match store.put_payload(&p) {
+                        match store.put_payload_v2(&p) {
                             Ok(_) => {
                                 NODE_PERSIST_PAYLOADS_TOTAL.fetch_add(1, Ordering::Relaxed);
                             }

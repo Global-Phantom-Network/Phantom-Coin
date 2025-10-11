@@ -21,6 +21,10 @@ pub enum StateError {
     MissingInput(OutPoint),
     DoubleSpend(OutPoint),
     AmountMismatch,
+    NotMature(OutPoint, u64),      // required_at (minted_at + threshold)
+    AlreadyStaked(OutPoint),
+    NotStaked(OutPoint),
+    Locked(OutPoint),
 }
 
 impl core::fmt::Display for StateError {
@@ -29,6 +33,10 @@ impl core::fmt::Display for StateError {
             Self::MissingInput(op) => write!(f, "missing input: {:?}", op),
             Self::DoubleSpend(op) => write!(f, "double spend: {:?}", op),
             Self::AmountMismatch => write!(f, "amounts in != out"),
+            Self::NotMature(op, req) => write!(f, "outpoint not mature: {:?}, required_at={}", op, req),
+            Self::AlreadyStaked(op) => write!(f, "outpoint already staked: {:?}", op),
+            Self::NotStaked(op) => write!(f, "outpoint not staked: {:?}", op),
+            Self::Locked(op) => write!(f, "outpoint is staked/locked: {:?}", op),
         }
     }
 }
@@ -40,15 +48,29 @@ pub trait StateBackend {
     fn put(&mut self, key: OutPoint, val: (Amount, LockCommitment));
     fn del(&mut self, key: &OutPoint) -> bool;
     fn iter<'a>(&'a self) -> Box<dyn Iterator<Item = (OutPoint, (Amount, LockCommitment))> + 'a>;
+
+    // optionale Meta-Persistenz: minted_at Index
+    fn get_minted_at(&self, _key: &OutPoint) -> Option<u64> { None }
+    fn set_minted_at(&mut self, _key: OutPoint, _idx: u64) {}
+    fn del_minted_at(&mut self, _key: &OutPoint) {}
+
+    // optionale Meta-Persistenz: Stake-Flag
+    fn is_staked(&self, _key: &OutPoint) -> bool { false }
+    fn set_staked(&mut self, _key: OutPoint) {}
+    fn unset_staked(&mut self, _key: &OutPoint) {}
 }
 
 pub struct InMemoryBackend {
     map: HashMap<OutPoint, (Amount, LockCommitment)>,
+    minted_at: HashMap<OutPoint, u64>,
+    stakes: HashSet<OutPoint>,
 }
 impl InMemoryBackend {
     pub fn new() -> Self {
         Self {
             map: HashMap::new(),
+            minted_at: HashMap::new(),
+            stakes: HashSet::new(),
         }
     }
     pub fn len(&self) -> usize {
@@ -76,6 +98,14 @@ impl StateBackend for InMemoryBackend {
     fn iter<'a>(&'a self) -> Box<dyn Iterator<Item = (OutPoint, (Amount, LockCommitment))> + 'a> {
         Box::new(self.map.iter().map(|(k, v)| (*k, *v)))
     }
+
+    fn get_minted_at(&self, key: &OutPoint) -> Option<u64> { self.minted_at.get(key).copied() }
+    fn set_minted_at(&mut self, key: OutPoint, idx: u64) { let _ = self.minted_at.insert(key, idx); }
+    fn del_minted_at(&mut self, key: &OutPoint) { let _ = self.minted_at.remove(key); }
+
+    fn is_staked(&self, key: &OutPoint) -> bool { self.stakes.contains(key) }
+    fn set_staked(&mut self, key: OutPoint) { let _ = self.stakes.insert(key); }
+    fn unset_staked(&mut self, key: &OutPoint) { let _ = self.stakes.remove(key); }
 }
 
 #[cfg(feature = "rocksdb")]
@@ -127,6 +157,19 @@ impl RocksDbBackend {
         lock.copy_from_slice(&b[8..40]);
         Some((u64::from_be_bytes(amt_b), LockCommitment(lock)))
     }
+
+    fn minted_key(op: &OutPoint) -> Vec<u8> {
+        let mut k = Vec::with_capacity(2 + 36);
+        k.extend_from_slice(b"ma");
+        k.extend_from_slice(&Self::enc_key(op));
+        k
+    }
+    fn staked_key(op: &OutPoint) -> Vec<u8> {
+        let mut k = Vec::with_capacity(2 + 36);
+        k.extend_from_slice(b"st");
+        k.extend_from_slice(&Self::enc_key(op));
+        k
+    }
 }
 
 #[cfg(feature = "rocksdb")]
@@ -160,6 +203,42 @@ impl StateBackend for RocksDbBackend {
                 _ => None,
             });
         Box::new(it)
+    }
+
+    // minted_at Index
+    fn get_minted_at(&self, key: &OutPoint) -> Option<u64> {
+        let k = Self::minted_key(key);
+        match self.db.get(k) {
+            Ok(Some(v)) if v.len() == 8 => {
+                let mut b = [0u8; 8];
+                b.copy_from_slice(&v);
+                Some(u64::from_be_bytes(b))
+            }
+            _ => None,
+        }
+    }
+    fn set_minted_at(&mut self, key: OutPoint, idx: u64) {
+        let k = Self::minted_key(&key);
+        let v = idx.to_be_bytes();
+        let _ = self.db.put(k, v);
+    }
+    fn del_minted_at(&mut self, key: &OutPoint) {
+        let k = Self::minted_key(key);
+        let _ = self.db.delete(k);
+    }
+
+    // Stake-Flag
+    fn is_staked(&self, key: &OutPoint) -> bool {
+        let k = Self::staked_key(key);
+        matches!(self.db.get(k), Ok(Some(_)))
+    }
+    fn set_staked(&mut self, key: OutPoint) {
+        let k = Self::staked_key(&key);
+        let _ = self.db.put(k, [1u8]);
+    }
+    fn unset_staked(&mut self, key: &OutPoint) {
+        let k = Self::staked_key(key);
+        let _ = self.db.delete(k);
     }
 }
 
@@ -266,6 +345,99 @@ impl<B: StateBackend> UtxoState<B> {
             leaves.push(blake3_32(&buf));
         }
         merkle_root_hashes(&leaves)
+    }
+}
+
+impl<B: StateBackend> UtxoState<B> {
+    /// Read-only Check inkl. Maturity/Stake
+    pub fn can_apply_micro_tx_with_maturity_indexed(
+        &self,
+        tx: &MicroTx,
+        current: u64,
+        threshold: u64,
+    ) -> Result<(), StateError> {
+        let mut seen: HashSet<OutPoint> = HashSet::new();
+        let mut amt_in: u128 = 0;
+        for tin in &tx.inputs {
+            let op = tin.prev_out;
+            if !seen.insert(op) { return Err(StateError::DoubleSpend(op)); }
+            if self.backend.is_staked(&op) { return Err(StateError::Locked(op)); }
+            let (amt, _lock) = self.backend.get(&op).ok_or(StateError::MissingInput(op))?;
+            let minted = self.backend.get_minted_at(&op).unwrap_or(0);
+            let required_at = minted.saturating_add(threshold);
+            if current < required_at { return Err(StateError::NotMature(op, required_at)); }
+            amt_in = amt_in.saturating_add(amt as u128);
+        }
+        let mut amt_out: u128 = 0;
+        for tout in &tx.outputs { amt_out = amt_out.saturating_add(tout.amount as u128); }
+        if amt_in != amt_out { return Err(StateError::AmountMismatch); }
+        Ok(())
+    }
+
+    /// Mint anwenden und minted_at Index setzen
+    pub fn apply_mint_with_index(&mut self, m: &MintEvent, minted_at_idx: u64) {
+        let txid = digest_mint(m);
+        for (i, out) in m.outputs.iter().enumerate() {
+            let op = OutPoint { txid, vout: i as u32 };
+            self.backend.put(op, (out.amount, out.lock));
+            self.backend.set_minted_at(op, minted_at_idx);
+        }
+    }
+
+    /// MicroTx anwenden mit Maturity/Stake-Prüfung und minted_at-Update
+    pub fn apply_micro_tx_with_maturity_indexed(
+        &mut self,
+        tx: &MicroTx,
+        current: u64,
+        threshold: u64,
+    ) -> Result<(), StateError> {
+        self.can_apply_micro_tx_with_maturity_indexed(tx, current, threshold)?;
+        for tin in &tx.inputs {
+            let _ = self.backend.del(&tin.prev_out);
+            self.backend.del_minted_at(&tin.prev_out);
+        }
+        let txid = digest_microtx(tx);
+        for (i, out) in tx.outputs.iter().enumerate() {
+            let op = OutPoint { txid, vout: i as u32 };
+            self.backend.put(op, (out.amount, out.lock));
+            self.backend.set_minted_at(op, current);
+        }
+        Ok(())
+    }
+
+    /// Stake: OutPoints binden (optional nur reife UTXOs zulassen)
+    pub fn bond_outpoints(
+        &mut self,
+        ops: &[OutPoint],
+        current: u64,
+        threshold: u64,
+        allow_unripe: bool,
+    ) -> Result<(), StateError> {
+        for op in ops {
+            if self.backend.get(op).is_none() { return Err(StateError::MissingInput(*op)); }
+            if self.backend.is_staked(op) { return Err(StateError::AlreadyStaked(*op)); }
+            if !allow_unripe {
+                let minted = self.backend.get_minted_at(op).unwrap_or(0);
+                let required_at = minted.saturating_add(threshold);
+                if current < required_at { return Err(StateError::NotMature(*op, required_at)); }
+            }
+        }
+        for op in ops { self.backend.set_staked(*op); }
+        Ok(())
+    }
+
+    /// Stake: OutPoints lösen
+    pub fn unbond_outpoints(
+        &mut self,
+        ops: &[OutPoint],
+        _current: u64,
+        _threshold: u64,
+    ) -> Result<(), StateError> {
+        for op in ops {
+            if !self.backend.is_staked(op) { return Err(StateError::NotStaked(*op)); }
+            self.backend.unset_staked(op);
+        }
+        Ok(())
     }
 }
 
