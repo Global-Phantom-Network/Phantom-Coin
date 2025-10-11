@@ -1,0 +1,78 @@
+name: pc-p2p Benches & Aggregation
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_benches:
+        description: "Run libp2p benches (can be slow)"
+        required: false
+        default: "false"
+      network_name:
+        description: "Network name for genesis_note"
+        required: false
+        default: "ci-bench"
+  push:
+    branches: [ main ]
+    paths:
+      - 'crates/pc-p2p/**'
+      - 'crates/phantom-node/**'
+      - '.github/workflows/p2p-benches.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'crates/pc-p2p/**'
+      - 'crates/phantom-node/**'
+      - '.github/workflows/p2p-benches.yml'
+
+jobs:
+  benches:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-all-crates: true
+
+      - name: Cargo check
+        run: cargo check
+
+      - name: Generate genesis_note for network_id headers
+        run: |
+          cargo run -p phantom-node --bin genesis_bootstrap -- \
+            --mempool_dir pc-data/mempool \
+            --network_name "${{ github.event.inputs.network_name || 'ci-bench' }}" \
+            --shards_initial 64 \
+            --committee_k 21 \
+            --txs_per_payload 256 \
+            --features 0
+
+      - name: Run pc-p2p benches (optional)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_benches == 'true' }}
+        env:
+          RUST_LOG: warn
+        run: |
+          cargo bench -p pc-p2p --features "async libp2p" --bench p2p_libp2p_rpc
+          cargo bench -p pc-p2p --features "async libp2p" --bench p2p_libp2p_e2e
+
+      - name: Aggregate results
+        run: |
+          cargo run -p pc-p2p --bin bench_agg || true
+
+      - name: Upload artifacts (criterion_raw + aggregation)
+        uses: actions/upload-artifact@v4
+        with:
+          name: pc-p2p-bench-artifacts
+          if-no-files-found: warn
+          retention-days: 7
+          path: |
+            target/criterion_agg.json
+            target/criterion_agg.csv
+            target/criterion_raw/**
+            target/criterion/**/estimates.json

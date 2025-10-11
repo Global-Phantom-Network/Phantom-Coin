@@ -1,0 +1,100 @@
+name: Benchmarks
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/bench.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  benches-libp2p:
+    name: Benches (async + libp2p)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build benches (no run)
+        run: cargo bench --no-run -q -p pc-p2p --features "async libp2p"
+
+      - name: Run benches (async libp2p)
+        run: |
+          cargo bench -p pc-p2p --features "async libp2p" --bench p2p_libp2p_rpc -- --measurement-time 10 --sample-size 10 --warm-up-time 2
+          cargo bench -p pc-p2p --features "async libp2p" --bench p2p_libp2p_e2e -- --measurement-time 10 --sample-size 10 --warm-up-time 2
+
+      - name: Aggregate results
+        run: cargo run -q -p pc-p2p --bin bench_agg
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benches-libp2p-artifacts
+          path: |
+            target/criterion_raw/**
+            target/criterion_agg.json
+            target/criterion_agg.csv
+            target/criterion_agg.md
+
+  benches-quic:
+    name: Benches (async + quic)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build benches (no run)
+        run: cargo bench --no-run -q -p pc-p2p --features "async quic"
+
+      - name: Run benches (async quic)
+        run: cargo bench -p pc-p2p --features "async quic" --bench p2p_quic_bench -- --measurement-time 10 --sample-size 10 --warm-up-time 2
+
+      - name: Aggregate results
+        run: cargo run -q -p pc-p2p --bin bench_agg
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benches-quic-artifacts
+          path: |
+            target/criterion_raw/**
+            target/criterion_agg.json
+            target/criterion_agg.csv
+            target/criterion_agg.md

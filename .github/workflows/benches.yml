@@ -1,0 +1,82 @@
+name: pc-p2p short benches
+
+on:
+  push:
+    paths:
+      - 'crates/pc-p2p/**'
+      - '.github/workflows/benches.yml'
+  pull_request:
+    paths:
+      - 'crates/pc-p2p/**'
+      - '.github/workflows/benches.yml'
+  workflow_dispatch: {}
+
+jobs:
+  benches:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      BENCH_P50_TOL: ${{ vars.BENCH_P50_TOL || '0.10' }}
+      BENCH_P95_TOL: ${{ vars.BENCH_P95_TOL || '0.10' }}
+      BENCH_TIMEOUT_TOL: ${{ vars.BENCH_TIMEOUT_TOL || '0.02' }}
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: pc-p2p-benches
+
+      - name: Cargo check
+        run: cargo check --locked
+
+      - name: Bench libp2p RPC (kurz)
+        run: cargo bench -p pc-p2p --features "async libp2p" --bench p2p_libp2p_rpc -- --measurement-time 12 --sample-size 10
+
+      - name: Bench libp2p E2E (kurz)
+        run: cargo bench -p pc-p2p --features "async libp2p" --bench p2p_libp2p_e2e -- --measurement-time 12 --sample-size 10
+
+      - name: Bench QUIC (kurz)
+        run: cargo bench -p pc-p2p --features "async quic" --bench p2p_quic_bench -- --measurement-time 12 --sample-size 10
+
+      - name: Aggregation
+        run: cargo run -p pc-p2p --bin bench_agg
+
+      - name: Regression Gate vs Baseline
+        run: cargo run -p pc-p2p --bin bench_gate -- --agg target/criterion_agg.csv
+
+      - name: GitHub Summary
+        if: always()
+        run: |
+          {
+            echo "## pc-p2p Bench Summary";
+            echo;
+            sed -e 's/\r$//' target/criterion_agg.md;
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Aggregation
+        uses: actions/upload-artifact@v4
+        with:
+          name: criterion-agg
+          path: |
+            target/criterion_agg.json
+            target/criterion_agg.csv
+            target/criterion_agg.md
+
+      - name: Upload Raw
+        uses: actions/upload-artifact@v4
+        with:
+          name: criterion-raw
+          path: target/criterion_raw
+
+      - name: Slack Notify (optional)
+        if: ${{ env.SLACK_WEBHOOK_URL != '' }}
+        run: |
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          SUM=$(head -n 30 target/criterion_agg.md | sed -e 's/"/\\"/g')
+          curl -X POST -H 'Content-type: application/json' --data "{\"text\":\"pc-p2p benches completed: ${RUN_URL}\\n\\n${SUM}\"}" "$SLACK_WEBHOOK_URL"

@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.1.2 (2025-10-11)
+
+- State/UTXO
+  - t15_utxo_state abgeschlossen: InMemory- und RocksDB-Backends (NVMe-freundliche Optionen), deterministische Apply-Pipeline inkl. Maturity/Stake, Merkle-Root (`UtxoState::root()`), Snapshots/Restore (`snapshot_to_*`/`restore_from_*`).
+  - Tests: `rocksdb_snapshot_roundtrip`, `rocksdb_state_root_changes` (Feature `rocksdb`).
+  - CI: RocksDB-Feature-Build/Test in `.github/workflows/ci.yml`.
+- Docs
+  - `docs/PHANTOMCOIN_TODO_PLAN.md`: t15 auf "completed" gesetzt, Done-Notiz mit Quellcode-/CI-/Test-Verweisen ergänzt.
+
 ## v0.1.1 (2025-09-30)
 
 - Lizenz & Compliance
