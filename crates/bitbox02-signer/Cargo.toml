@@ -1,0 +1,21 @@
+[package]
+name = "bitbox02-signer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow = "1"
+argon2 = { version = "0.5", features = ["std"] }
+base64 = "0.22"
+bip32 = { version = "0.5", features = ["secp256k1"] }
+bip39 = "1"
+chacha20poly1305 = { version = "0.10", features = ["std"] }
+clap = { version = "4", features = ["derive"] }
+hex = "0.4"
+pc-crypto = { path = "../pc-crypto" }
+rpassword = "7"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+zeroize = "1"

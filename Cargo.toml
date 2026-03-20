@@ -1,0 +1,52 @@
+[workspace]
+members = [
+    "crates/pc-codec",
+    "crates/pc-crypto",
+    "crates/pc-types",
+    "crates/pc-consensus",
+    "crates/phantom-config",
+    "crates/pc-state",
+    "crates/phantom-node",
+    "crates/pc-p2p",
+    "crates/pc-da",
+    "crates/pc-store",
+    "crates/phantom-miner",
+    "crates/phantom-miner-gui",
+    "crates/phantom-signer",
+    "crates/bitbox-api-rs",
+    "crates/bitbox02-signer",
+    "crates/phantom-tui-wallet",
+    "crates/phantom-tui",
+
+    "crates/phantom-i18n",
+    "crates/pc-netsim",
+    "apps/phantom-dashboard/src-tauri",
+]
+exclude = [
+    "crates/pc-codec/fuzz",
+    "crates/pc-types/fuzz",
+    "crates/pc-p2p/fuzz",
+    "crates/pc-state/fuzz",
+    "crates/pc-crypto/fuzz",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+version = "0.1.1"
+license = "AGPL-3.0-only"
+
+[profile.release]
+panic = "abort"
+lto = "fat"
+codegen-units = 1
+opt-level = 3
+
+[profile.release.package.bitbox-api]
+opt-level = 'z'
+codegen-units = 1
+
+[profile.dev]
+panic = "abort"
+opt-level = 1
+codegen-units = 4

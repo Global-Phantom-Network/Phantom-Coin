@@ -1,0 +1,11 @@
+# libFuzzer dictionary for pc-types EvidenceEvent/EvidenceKind
+# Top-level EvidenceKind tag bytes
+"\x01"
+"\x02"
+"\x03"
+# Common small integers
+"\x00"
+"\x01"
+"\x02"
+"\x7f"
+"\x80\x01"

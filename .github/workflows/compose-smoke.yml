@@ -1,0 +1,63 @@
+name: Compose Smoke
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/compose-smoke.yml'
+      - 'Dockerfile'
+      - 'docker-compose.yml'
+      - 'deploy/docker-compose.yml'
+      - 'deploy/prometheus.yml'
+      - 'scripts/verify_compose_stacks_ci.sh'
+      - 'crates/phantom-node/**'
+      - 'crates/pc-p2p/**'
+      - 'configs/**'
+      - 'docs/devops/docker-compose.md'
+      - 'docs/devops/README.md'
+      - 'runbooks/testnets/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/compose-smoke.yml'
+      - 'Dockerfile'
+      - 'docker-compose.yml'
+      - 'deploy/docker-compose.yml'
+      - 'deploy/prometheus.yml'
+      - 'scripts/verify_compose_stacks_ci.sh'
+      - 'crates/phantom-node/**'
+      - 'crates/pc-p2p/**'
+      - 'configs/**'
+      - 'docs/devops/docker-compose.md'
+      - 'docs/devops/README.md'
+      - 'runbooks/testnets/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run compose smoke verification
+        env:
+          KEEP_WORK_DIR: '1'
+          WORK_DIR: ${{ runner.temp }}/compose-smoke
+        run: |
+          mkdir -p "$WORK_DIR"
+          chmod +x scripts/verify_compose_stacks_ci.sh
+          scripts/verify_compose_stacks_ci.sh
+
+      - name: Upload compose smoke artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compose-smoke
+          path: ${{ runner.temp }}/compose-smoke
+          if-no-files-found: ignore

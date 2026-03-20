@@ -1,0 +1,394 @@
+x-phantom-node-build: &phantom-node-build
+  context: ..
+  args:
+    SOURCE_DATE_EPOCH: 0
+    RUSTFLAGS: "-C debuginfo=0 -C link-arg=-Wl,--build-id=none"
+
+services:
+  genesis:
+    build: *phantom-node-build
+    image: phantom-node:local
+    container_name: pc-genesis
+    user: "0:0"
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        if [ ! -s /shared/genesis_note.bin ]; then
+          install -m 0644 /usr/local/share/phantom-coin/genesis_note.bin /shared/genesis_note.bin
+        fi
+    volumes:
+      - shared-genesis:/shared
+
+  node1:
+    build: *phantom-node-build
+    image: phantom-node:local
+    container_name: pc-node1
+    hostname: node1
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        mkdir -p /data/mempool
+        i=0
+        while [ ! -s /shared/genesis_note.bin ]; do
+          i=$((i + 1))
+          if [ "$$i" -ge 60 ]; then
+            echo "shared genesis_note.bin not available" >&2
+            exit 1
+          fi
+          sleep 1
+        done
+        install -m 0644 /shared/genesis_note.bin /data/mempool/genesis_note.bin
+        exec /usr/local/bin/phantom-node p2p-quic-listen \
+          --addr 0.0.0.0:9000 \
+          --unsafe-confirm \
+          --store-dir /data \
+          --fsync \
+          --k 21 \
+          --cert-out /data/p2p_quic_cert.der \
+          --hdr-capacity 200 \
+          --hdr-refill-per-sec 200 \
+          --inv-capacity 300 \
+          --inv-refill-per-sec 300 \
+          --req-capacity 300 \
+          --req-refill-per-sec 300 \
+          --resp-capacity 300 \
+          --resp-refill-per-sec 300 \
+          --bytes-capacity 4194304 \
+          --bytes-refill-per-sec 2097152 \
+          --per-peer true \
+          --peer-ttl-secs 600 \
+          --tx-proposer \
+          --tx-proposer-interval-ms 5000
+    volumes:
+      - shared-genesis:/shared:ro
+      - node1-data:/data
+    environment:
+      - RUST_LOG=${RUST_LOG:-info}
+      - RUST_BACKTRACE=${RUST_BACKTRACE:-0}
+    depends_on:
+      - genesis
+    restart: unless-stopped
+
+  node2:
+    build: *phantom-node-build
+    image: phantom-node:local
+    container_name: pc-node2
+    hostname: node2
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        mkdir -p /data/mempool
+        i=0
+        while [ ! -s /shared/genesis_note.bin ]; do
+          i=$((i + 1))
+          if [ "$$i" -ge 60 ]; then
+            echo "shared genesis_note.bin not available" >&2
+            exit 1
+          fi
+          sleep 1
+        done
+        install -m 0644 /shared/genesis_note.bin /data/mempool/genesis_note.bin
+        i=0
+        while [ ! -s /bootstrap/node1/p2p_quic_cert.der ]; do
+          i=$((i + 1))
+          if [ "$$i" -ge 120 ]; then
+            echo "node1 certificate not available" >&2
+            exit 1
+          fi
+          sleep 1
+        done
+        cat > /data/bootstrap_peers.json <<'EOF'
+        {"peers":[{"addr":"node1:9000","cert_file":"/bootstrap/node1/p2p_quic_cert.der"}]}
+        EOF
+        exec /usr/local/bin/phantom-node p2p-quic-listen \
+          --addr 0.0.0.0:9000 \
+          --unsafe-confirm \
+          --store-dir /data \
+          --fsync \
+          --k 21 \
+          --cert-out /data/p2p_quic_cert.der \
+          --peers-import /data/bootstrap_peers.json \
+          --hdr-capacity 200 \
+          --hdr-refill-per-sec 200 \
+          --inv-capacity 300 \
+          --inv-refill-per-sec 300 \
+          --req-capacity 300 \
+          --req-refill-per-sec 300 \
+          --resp-capacity 300 \
+          --resp-refill-per-sec 300 \
+          --bytes-capacity 4194304 \
+          --bytes-refill-per-sec 2097152 \
+          --per-peer true \
+          --peer-ttl-secs 600
+    volumes:
+      - shared-genesis:/shared:ro
+      - node2-data:/data
+      - node1-data:/bootstrap/node1:ro
+    environment:
+      - RUST_LOG=${RUST_LOG:-info}
+      - RUST_BACKTRACE=${RUST_BACKTRACE:-0}
+    depends_on:
+      - node1
+    restart: unless-stopped
+
+  node3:
+    build: *phantom-node-build
+    image: phantom-node:local
+    container_name: pc-node3
+    hostname: node3
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        mkdir -p /data/mempool
+        i=0
+        while [ ! -s /shared/genesis_note.bin ]; do
+          i=$((i + 1))
+          if [ "$$i" -ge 60 ]; then
+            echo "shared genesis_note.bin not available" >&2
+            exit 1
+          fi
+          sleep 1
+        done
+        install -m 0644 /shared/genesis_note.bin /data/mempool/genesis_note.bin
+        i=0
+        while [ ! -s /bootstrap/node1/p2p_quic_cert.der ]; do
+          i=$((i + 1))
+          if [ "$$i" -ge 120 ]; then
+            echo "node1 certificate not available" >&2
+            exit 1
+          fi
+          sleep 1
+        done
+        cat > /data/bootstrap_peers.json <<'EOF'
+        {"peers":[{"addr":"node1:9000","cert_file":"/bootstrap/node1/p2p_quic_cert.der"}]}
+        EOF
+        exec /usr/local/bin/phantom-node p2p-quic-listen \
+          --addr 0.0.0.0:9000 \
+          --unsafe-confirm \
+          --store-dir /data \
+          --fsync \
+          --k 21 \
+          --cert-out /data/p2p_quic_cert.der \
+          --peers-import /data/bootstrap_peers.json \
+          --hdr-capacity 200 \
+          --hdr-refill-per-sec 200 \
+          --inv-capacity 300 \
+          --inv-refill-per-sec 300 \
+          --req-capacity 300 \
+          --req-refill-per-sec 300 \
+          --resp-capacity 300 \
+          --resp-refill-per-sec 300 \
+          --bytes-capacity 4194304 \
+          --bytes-refill-per-sec 2097152 \
+          --per-peer true \
+          --peer-ttl-secs 600
+    volumes:
+      - shared-genesis:/shared:ro
+      - node3-data:/data
+      - node1-data:/bootstrap/node1:ro
+    environment:
+      - RUST_LOG=${RUST_LOG:-info}
+      - RUST_BACKTRACE=${RUST_BACKTRACE:-0}
+    depends_on:
+      - node1
+    restart: unless-stopped
+
+  node1-status:
+    build: *phantom-node-build
+    image: phantom-node:local
+    container_name: pc-node1-status
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        mkdir -p /data/mempool
+        i=0
+        while [ ! -s /shared/genesis_note.bin ]; do
+          i=$((i + 1))
+          if [ "$$i" -ge 60 ]; then
+            echo "shared genesis_note.bin not available" >&2
+            exit 1
+          fi
+          sleep 1
+        done
+        install -m 0644 /shared/genesis_note.bin /data/mempool/genesis_note.bin
+        auth_token_file=/tmp/phantom-status-auth.token
+        status_config=/tmp/status-serve.toml
+        umask 077
+        printf '%s\n' "$$PHANTOM_STATUS_AUTH_TOKEN" > "$$auth_token_file"
+        cat > "$$status_config" <<EOF
+        config_version = 1
+        addr = "127.0.0.1:8080"
+        mempool_dir = "/data/mempool"
+        store_dir = "/data"
+        fsync = true
+        require_auth = true
+        auth_token_file = "$$auth_token_file"
+        EOF
+        unset PHANTOM_STATUS_AUTH_TOKEN
+        exec /usr/local/bin/phantom-node status-serve \
+          --config "$$status_config" \
+          --genesis-note /data/mempool/genesis_note.bin
+    volumes:
+      - shared-genesis:/shared:ro
+      - node1-data:/data
+    environment:
+      - RUST_LOG=${RUST_LOG:-info}
+      - RUST_BACKTRACE=${RUST_BACKTRACE:-0}
+      - PHANTOM_STATUS_AUTH_TOKEN=${NODE1_STATUS_AUTH_TOKEN:?NODE1_STATUS_AUTH_TOKEN must be set}
+    ports:
+      - "127.0.0.1:${NODE1_PORT:-18081}:18081"
+    depends_on:
+      - node1
+    restart: unless-stopped
+
+  node1-status-proxy:
+    image: alpine/socat@sha256:5dc44a92103afe611c152fca347c524a170e1f3fda2411c29e2894d22a855099
+    container_name: pc-node1-status-proxy
+    command:
+      - "TCP-LISTEN:18081,bind=0.0.0.0,reuseaddr,fork"
+      - "TCP:127.0.0.1:8080"
+    network_mode: "service:node1-status"
+    depends_on:
+      - node1-status
+    restart: unless-stopped
+
+  node2-status:
+    build: *phantom-node-build
+    image: phantom-node:local
+    container_name: pc-node2-status
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        mkdir -p /data/mempool
+        i=0
+        while [ ! -s /shared/genesis_note.bin ]; do
+          i=$((i + 1))
+          if [ "$$i" -ge 60 ]; then
+            echo "shared genesis_note.bin not available" >&2
+            exit 1
+          fi
+          sleep 1
+        done
+        install -m 0644 /shared/genesis_note.bin /data/mempool/genesis_note.bin
+        auth_token_file=/tmp/phantom-status-auth.token
+        status_config=/tmp/status-serve.toml
+        umask 077
+        printf '%s\n' "$$PHANTOM_STATUS_AUTH_TOKEN" > "$$auth_token_file"
+        cat > "$$status_config" <<EOF
+        config_version = 1
+        addr = "127.0.0.1:8080"
+        mempool_dir = "/data/mempool"
+        store_dir = "/data"
+        fsync = true
+        require_auth = true
+        auth_token_file = "$$auth_token_file"
+        EOF
+        unset PHANTOM_STATUS_AUTH_TOKEN
+        exec /usr/local/bin/phantom-node status-serve \
+          --config "$$status_config" \
+          --genesis-note /data/mempool/genesis_note.bin
+    volumes:
+      - shared-genesis:/shared:ro
+      - node2-data:/data
+    environment:
+      - RUST_LOG=${RUST_LOG:-info}
+      - RUST_BACKTRACE=${RUST_BACKTRACE:-0}
+      - PHANTOM_STATUS_AUTH_TOKEN=${NODE2_STATUS_AUTH_TOKEN:?NODE2_STATUS_AUTH_TOKEN must be set}
+    ports:
+      - "127.0.0.1:${NODE2_PORT:-18082}:18082"
+    depends_on:
+      - node2
+    restart: unless-stopped
+
+  node2-status-proxy:
+    image: alpine/socat@sha256:5dc44a92103afe611c152fca347c524a170e1f3fda2411c29e2894d22a855099
+    container_name: pc-node2-status-proxy
+    command:
+      - "TCP-LISTEN:18082,bind=0.0.0.0,reuseaddr,fork"
+      - "TCP:127.0.0.1:8080"
+    network_mode: "service:node2-status"
+    depends_on:
+      - node2-status
+    restart: unless-stopped
+
+  node3-status:
+    build: *phantom-node-build
+    image: phantom-node:local
+    container_name: pc-node3-status
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        mkdir -p /data/mempool
+        i=0
+        while [ ! -s /shared/genesis_note.bin ]; do
+          i=$((i + 1))
+          if [ "$$i" -ge 60 ]; then
+            echo "shared genesis_note.bin not available" >&2
+            exit 1
+          fi
+          sleep 1
+        done
+        install -m 0644 /shared/genesis_note.bin /data/mempool/genesis_note.bin
+        auth_token_file=/tmp/phantom-status-auth.token
+        status_config=/tmp/status-serve.toml
+        umask 077
+        printf '%s\n' "$$PHANTOM_STATUS_AUTH_TOKEN" > "$$auth_token_file"
+        cat > "$$status_config" <<EOF
+        config_version = 1
+        addr = "127.0.0.1:8080"
+        mempool_dir = "/data/mempool"
+        store_dir = "/data"
+        fsync = true
+        require_auth = true
+        auth_token_file = "$$auth_token_file"
+        EOF
+        unset PHANTOM_STATUS_AUTH_TOKEN
+        exec /usr/local/bin/phantom-node status-serve \
+          --config "$$status_config" \
+          --genesis-note /data/mempool/genesis_note.bin
+    volumes:
+      - shared-genesis:/shared:ro
+      - node3-data:/data
+    environment:
+      - RUST_LOG=${RUST_LOG:-info}
+      - RUST_BACKTRACE=${RUST_BACKTRACE:-0}
+      - PHANTOM_STATUS_AUTH_TOKEN=${NODE3_STATUS_AUTH_TOKEN:?NODE3_STATUS_AUTH_TOKEN must be set}
+    ports:
+      - "127.0.0.1:${NODE3_PORT:-18083}:18083"
+    depends_on:
+      - node3
+    restart: unless-stopped
+
+  node3-status-proxy:
+    image: alpine/socat@sha256:5dc44a92103afe611c152fca347c524a170e1f3fda2411c29e2894d22a855099
+    container_name: pc-node3-status-proxy
+    command:
+      - "TCP-LISTEN:18083,bind=0.0.0.0,reuseaddr,fork"
+      - "TCP:127.0.0.1:8080"
+    network_mode: "service:node3-status"
+    depends_on:
+      - node3-status
+    restart: unless-stopped
+
+  prometheus:
+    profiles: ["observability"]
+    image: prom/prometheus:v2.55.0
+    container_name: pc-prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    restart: unless-stopped
+
+volumes:
+  shared-genesis:
+  node1-data:
+  node2-data:
+  node3-data:

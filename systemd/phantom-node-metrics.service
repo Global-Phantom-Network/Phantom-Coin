@@ -1,0 +1,28 @@
+[Unit]
+Description=Phantom-Coin Prometheus Metrics Exporter
+After=network-online.target phantom-node.service
+
+[Service]
+Type=simple
+User=phantom
+Group=phantom
+WorkingDirectory=/opt/phantom-coin
+
+ExecStart=/opt/phantom-coin/bin/phantom-node \
+  p2p-metrics-serve \
+  --addr 127.0.0.1:9101
+
+Restart=on-failure
+RestartSec=5s
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=phantom-metrics
+
+[Install]
+WantedBy=multi-user.target

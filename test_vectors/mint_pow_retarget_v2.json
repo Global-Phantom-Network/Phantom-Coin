@@ -1,0 +1,68 @@
+{
+  "cases": [
+    {
+      "name": "on_target",
+      "old_bits": 20,
+      "min_bits": 20,
+      "expected_window_anchors": 120960,
+      "actual_window_anchors": 120960,
+      "next_bits": 20
+    },
+    {
+      "name": "fast_4x_harder",
+      "old_bits": 20,
+      "min_bits": 20,
+      "expected_window_anchors": 120960,
+      "actual_window_anchors": 30240,
+      "next_bits": 22
+    },
+    {
+      "name": "fast_2x_harder",
+      "old_bits": 20,
+      "min_bits": 20,
+      "expected_window_anchors": 120960,
+      "actual_window_anchors": 60480,
+      "next_bits": 21
+    },
+    {
+      "name": "slow_2x_clamped_by_min",
+      "old_bits": 20,
+      "min_bits": 20,
+      "expected_window_anchors": 120960,
+      "actual_window_anchors": 241920,
+      "next_bits": 20
+    },
+    {
+      "name": "slow_2x_with_lower_min",
+      "old_bits": 20,
+      "min_bits": 0,
+      "expected_window_anchors": 120960,
+      "actual_window_anchors": 241920,
+      "next_bits": 19
+    },
+    {
+      "name": "slow_4x_easier",
+      "old_bits": 20,
+      "min_bits": 0,
+      "expected_window_anchors": 120960,
+      "actual_window_anchors": 483840,
+      "next_bits": 18
+    },
+    {
+      "name": "extreme_fast_clamped",
+      "old_bits": 20,
+      "min_bits": 20,
+      "expected_window_anchors": 120960,
+      "actual_window_anchors": 1,
+      "next_bits": 22
+    },
+    {
+      "name": "pow_disabled_stays_disabled",
+      "old_bits": 0,
+      "min_bits": 0,
+      "expected_window_anchors": 120960,
+      "actual_window_anchors": 120960,
+      "next_bits": 0
+    }
+  ]
+}

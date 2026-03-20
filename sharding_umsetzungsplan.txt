@@ -1,0 +1,67 @@
+# UMSETZUNGSPLAN: Elastisches Sharding basierend auf Validator-Pool
+# Projekt: Phantom-Coin
+# Ziel: Automatische Erhöhung/Verringerung der Shard-Anzahl zur Laufzeit (ohne Neustart), basierend auf der Anzahl der aktiven Validatoren.
+
+================================================================================
+GRUNDLAGEN & DESIGN-ENTSCHEIDUNG
+================================================================================
+Die Shard-Anzahl und die Committee-Größe (K) werden epochal (z.B. alle X Anchors) 
+neu berechnet, basierend auf der Größe des Validator-Pools (`eligible_candidates`).
+
+Formel für dynamisches K:
+  K_current = max(1, min(21, eligible_candidates.len()))
+
+Formel für dynamische Shards:
+  Shards_current = max(1, min(64, floor(eligible_candidates.len() / 21)))
+
+Vorteil: Dies funktioniert sofort mit dem bestehenden Genesis-Node (K=1, Shards=1).
+Das Netzwerk skaliert nahtlos von 1 Validator (1 Shard, K=1) bis zu 1344 Validatoren (64 Shards, K=21).
+
+================================================================================
+SCHRITT 1: Kern-Logik für dynamische Shard/K-Berechnung (pc-consensus)
+================================================================================
+[ ] 1.1 In `pc-consensus/src/rotation_manager.rs` (oder ähnlich) eine Struct `NetworkScale` mit `k: u8` und `num_shards: u16` hinzufügen.
+[ ] 1.2 Funktion `compute_network_scale(pool_size: usize) -> NetworkScale` implementieren.
+[ ] 1.3 `RotationRecord` muss `num_shards` und `k` der jeweiligen Epoche speichern.
+
+================================================================================
+SCHRITT 2: Anpassung der Finalisierungs-Warteschlange (pc-consensus)
+================================================================================
+[ ] 2.1 In `pc-consensus/src/finalized_queue.rs`: Die Queue muss wissen, wie viele Shards pro Epoche erwartet werden (z.B. via Tracking in einer Map `epoch -> num_shards` oder durch Übergabe an `pop_next`).
+
+================================================================================
+SCHRITT 3: Auflösen des Hardcodings im Runtime (phantom-node/quic_server.rs)
+================================================================================
+[ ] 3.1 Das hardcodierte `let num_shards_state: u16 = 1;` und `my_shard_id: u16 = 0;` entfernen.
+[ ] 3.2 State-Variablen (`AtomicU16` / Mutex) für `current_num_shards` und `current_k` einführen.
+[ ] 3.3 Beim Node-Start die Werte aus dem aktuellen Validator-Pool berechnen (via Stake-Registry).
+
+================================================================================
+SCHRITT 4: Dynamische Validator-Zuständigkeit (Committee-Zuweisung)
+================================================================================
+[ ] 4.1 Die VRF-Committee-Wahl muss pro Shard durchgeführt werden.
+[ ] 4.2 Eine Funktion `get_active_shards_for_validator(pubkey, current_shards)` in `quic_server.rs`, die berechnet, in welchen Shards der lokale Node aktuell Proposer/Attestor ist.
+
+================================================================================
+SCHRITT 5: Mempool und Tx-Routing Anpassung
+================================================================================
+[ ] 5.1 Mempool-Kapazität (`mempool_cap_per_shard`) muss den dynamischen `current_num_shards` nutzen.
+[ ] 5.2 Der Tx-Filter im Mempool (`shard_for_tx`) muss `current_num_shards` nutzen.
+
+================================================================================
+SCHRITT 6: Proposer-Loop Anpassung (quic_server.rs)
+================================================================================
+[ ] 6.1 Die Proposer-Loop iteriert nur über die Shards, für die der lokale Node als Proposer zuständig ist.
+[ ] 6.2 Die Payload-Header erhalten den korrekten `shard_id`-Wert.
+
+================================================================================
+SCHRITT 7: State Apply & Finalisierung (quic_server.rs)
+================================================================================
+[ ] 7.1 In der Finalisierungs-Schleife (`verify_header_finality`) muss das dynamische `k` aus der Epoche verwendet werden (nicht mehr ein fixes `k`).
+[ ] 7.2 Shard-Filter bei Tx-Apply prüfen.
+
+================================================================================
+SCHRITT 8: Tests & Verifikation
+================================================================================
+[ ] 8.1 Unit-Test für `compute_network_scale`.
+[ ] 8.2 Integration-Tests anpassen, sodass sie mit dynamischem Sharding klarkommen.

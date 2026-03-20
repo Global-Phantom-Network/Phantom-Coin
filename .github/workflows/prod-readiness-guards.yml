@@ -1,0 +1,47 @@
+name: Prod Readiness Guards
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/prod-readiness-guards.yml'
+      - 'scripts/verify_prod_readiness_guards.sh'
+      - 'Dockerfile'
+      - 'README.md'
+      - 'Makefile'
+      - 'docker-compose.yml'
+      - 'deploy/**'
+      - 'configs/**'
+      - 'docs/**'
+      - 'runbooks/**'
+      - 'scripts/**'
+      - 'systemd/**'
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/prod-readiness-guards.yml'
+      - 'scripts/verify_prod_readiness_guards.sh'
+      - 'Dockerfile'
+      - 'README.md'
+      - 'Makefile'
+      - 'docker-compose.yml'
+      - 'deploy/**'
+      - 'configs/**'
+      - 'docs/**'
+      - 'runbooks/**'
+      - 'scripts/**'
+      - 'systemd/**'
+  workflow_dispatch:
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run prod-readiness guards
+        run: |
+          chmod +x scripts/verify_prod_readiness_guards.sh
+          scripts/verify_prod_readiness_guards.sh

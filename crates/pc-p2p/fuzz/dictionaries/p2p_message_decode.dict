@@ -1,0 +1,19 @@
+# libFuzzer dictionary for P2pMessage decode
+"\x01"
+"\x02"
+"\x03"
+"\x04"
+"\x05"
+"\x06"
+# Req tags
+"\x01"
+"\x02"
+"\x03"
+# Resp tags
+"\x01"
+"\x02"
+"\x03"
+"\x04"
+# NotFound.ty values
+"\x01"
+"\x02"

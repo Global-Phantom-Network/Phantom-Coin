@@ -1,0 +1,12 @@
+{
+  "peers": [
+    {
+      "addr": "seed1.phantom.local:9000",
+      "cert_file": "/var/lib/phantom-coin/validator/p2p_quic_cert.der"
+    },
+    {
+      "addr": "192.168.1.100:9000",
+      "cert_file": "/absolute/path/to/peer_cert.der"
+    }
+  ]
+}

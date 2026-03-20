@@ -1,0 +1,2677 @@
+================================================================================
+  PHANTOM-COIN — KONSOLIDIERTER SECURITY-AUDIT REPORT
+  Datum: 2026-02-11 (Update: Runde 10 — FINAL, alle Dateien gescannt)
+  Analysierte Codebase: ~62.600 Zeilen (71 Dateien)
+  Findings gesamt: 117 (P0: 13, P1: 47, P2: 57)
+================================================================================
+
+LEGENDE:
+  P0 = Kritisch (Remote Exploit / Consensus-Break / Fund-Loss)
+  P1 = Hoch     (DoS / Privilege Escalation / Data Corruption)
+  P2 = Mittel   (Logic Bug / Hardening / UX)
+  [ ] = Offen   [x] = Gefixt
+
+ANALYSIERTE DATEIEN:
+  phantom-node/src/main.rs          (11.505 Zeilen)
+  phantom-node/src/mint_rpc.rs      (   352 Zeilen)
+  phantom-node/src/bin/mint_rpc.rs  (   706 Zeilen)
+  phantom-signer/src/main.rs        ( 5.070 Zeilen)
+  phantom-signer/src/payjoin.rs     (   511 Zeilen)
+  phantom-signer/src/pkcs11_sign.rs (   159 Zeilen)
+  phantom-signer/src/psbt.rs        (   182 Zeilen)
+  phantom-signer/src/slashdb.rs     (   177 Zeilen)
+  phantom-signer/src/walletdb.rs    (   346 Zeilen)
+  --- Runde 3: Restliche Crates ---
+  pc-store/src/lib.rs               (   507 Zeilen)
+  pc-codec/src/lib.rs               (   463 Zeilen)
+  pc-da/src/lib.rs + da_gating/*    (   879 Zeilen)
+  pc-crypto/src/{lib,schnorr,bls,stealth}.rs (1.078 Zeilen)
+  phantom-config/src/lib.rs         (    45 Zeilen)
+  phantom-i18n/src/*                ( 2.546 Zeilen)
+  bitbox02-signer/src/main.rs       (   601 Zeilen)
+  phantom-miner-gui/src/main.rs     (   783 Zeilen)
+  --- Runde 4: P2P, Netsim, TUI, BitBox-API ---
+  pc-p2p/src/lib.rs                 ( 4.504 Zeilen)
+  pc-p2p/src/peer_store.rs          (   330 Zeilen)
+  pc-p2p/src/rocksdb_store.rs       (   385 Zeilen)
+  pc-p2p/src/libp2p_node.rs         (   951 Zeilen)
+  pc-netsim/src/lib.rs              (   193 Zeilen)
+  phantom-tui/src/main.rs           (   293 Zeilen)
+  phantom-tui/src/node.rs           (   860 Zeilen)
+  phantom-tui/src/wallet.rs         (   879 Zeilen)
+  phantom-tui/src/tools.rs          (   395 Zeilen)
+  phantom-tui/src/binutil.rs        (    70 Zeilen)
+  phantom-tui/src/miner.rs          (   962 Zeilen)
+  bitbox-api-rs/src/lib.rs          (   422 Zeilen)
+  bitbox-api-rs/src/communication.rs(   277 Zeilen)
+  bitbox-api-rs/src/noise.rs        (   105 Zeilen)
+  --- Runde 5: State, Miner, Cross-Crate ---
+  pc-state/src/lib.rs               ( 2.777 Zeilen)
+  pc-state/src/pruning_tests.rs     (    55 Zeilen)
+  pc-consensus/src/attestation.rs   (    67 Zeilen)
+  pc-consensus/src/attestor_claims.rs(  633 Zeilen)
+  pc-consensus/src/committee_hash.rs(   107 Zeilen)
+  pc-consensus/src/role_policy.rs   (   160 Zeilen)
+  pc-consensus/src/validator_control.rs( 65 Zeilen)
+  pc-consensus/src/consts.rs        (   222 Zeilen)
+  phantom-miner/src/main.rs         ( 1.103 Zeilen)
+  phantom-signer/src/stealth.rs     (   418 Zeilen)
+  --- Runde 6: GUI-Wallet, TUI-Wallet ---
+  phantom-gui-wallet/src/main.rs    ( 8.605 Zeilen)
+  phantom-tui-wallet/src/main.rs    ( 1.062 Zeilen)
+  --- Runde 7: status_http, quic_listen, mine_mint, TUI-Signer, Node-Binaries ---
+  phantom-node/src/bin/status_http.rs       ( 1.101 Zeilen)
+  phantom-node/src/bin/quic_listen_with_metrics.rs ( 378 Zeilen)
+  phantom-node/src/bin/mine_mint.rs         (   164 Zeilen)
+  phantom-node/src/bin/genesis_bootstrap.rs (   118 Zeilen)
+  phantom-node/src/bin/gen_headers.rs       (    52 Zeilen)
+  phantom-node/src/bin/gen_payloads.rs      (    90 Zeilen)
+  phantom-tui/src/signer.rs                 ( 1.824 Zeilen)
+  --- Runde 8: phantom-tui (main, node, wallet, miner) ---
+  phantom-tui/src/main.rs             (   293 Zeilen)  [CLEAN]
+  phantom-tui/src/node.rs             (   860 Zeilen)
+  phantom-tui/src/wallet.rs           (   879 Zeilen)
+  phantom-tui/src/miner.rs            (   962 Zeilen)
+  --- Runde 9: pc-da, phantom-config ---
+  pc-da/src/lib.rs                    (   133 Zeilen)  [CLEAN]
+  pc-da/src/da_gating/mod.rs          (   343 Zeilen)
+  pc-da/src/da_gating/fetcher.rs      (   184 Zeilen)  [CLEAN]
+  pc-da/src/da_gating/storage.rs      (   219 Zeilen)  [CLEAN]
+  phantom-config/src/lib.rs           (    45 Zeilen)  [CLEAN]
+  --- Runde 10: TUI-Tools, i18n, Fuzz-Seeds, Benchmarks (alle CLEAN) ---
+  phantom-tui/src/tools.rs            (   395 Zeilen)  [CLEAN]
+  phantom-tui/src/binutil.rs          (    70 Zeilen)  [CLEAN]
+  phantom-i18n/src/lib.rs             (    61 Zeilen)  [CLEAN]
+  phantom-i18n/src/cli.rs             (   584 Zeilen)  [CLEAN]
+  phantom-i18n/src/common.rs          (   443 Zeilen)  [CLEAN]
+  phantom-i18n/src/gui.rs             (   683 Zeilen)  [CLEAN]
+  phantom-i18n/src/tui.rs             (   775 Zeilen)  [CLEAN]
+  pc-codec/src/bin/mk_fuzz_seeds.rs   (    55 Zeilen)  [CLEAN]
+  pc-types/src/bin/mk_types_fuzz_seeds.rs ( 172 Zeilen) [CLEAN]
+  pc-p2p/src/bin/mk_p2p_fuzz_seeds.rs (   214 Zeilen)  [CLEAN]
+  pc-p2p/src/bin/bench_agg.rs         (   575 Zeilen)  [CLEAN]
+  pc-p2p/src/bin/bench_ci_gate.rs     (   435 Zeilen)  [CLEAN]
+  pc-p2p/src/bin/bench_gate.rs        (   355 Zeilen)  [CLEAN]
+
+================================================================================
+  TOP-5 SOFORT FIXEN
+================================================================================
+
+  1. F38 — HSM Vote-Domain weicht von main.rs ab → HSM-Validatoren broken
+  2. F19 — Standalone mint_rpc persistiert Mint nicht → Consensus-Divergenz
+  3. F39 — PayJoin validiert Sender-Outputs nicht → Fund-Theft
+  4. F24 — --secret-hex leakt Key in Prozessliste
+  5. F25 — Seed-Woerter auf stderr ohne TTY-Check → Log-Leak
+
+================================================================================
+  P0 — KRITISCH (9 Findings)
+================================================================================
+
+----------------------------------------------------------------------
+[x] F1 — TLS-Branch Code-Duplizierung → Auth-Bypass-Risiko
+----------------------------------------------------------------------
+  Modul:      phantom-node
+  Datei:      crates/phantom-node/src/main.rs
+  Zeilen:     (HTTP+TLS-Endpoint-Setup, ~Z.800-2500)
+  Confidence: high
+
+  Risiko:
+    Die HTTP-Endpoints werden zweimal definiert: einmal fuer Plain-HTTP,
+    einmal fuer TLS. Aenderungen an Auth-Guards in einem Branch werden
+    leicht im anderen vergessen → Auth-Bypass auf TLS oder umgekehrt.
+
+  Fix:
+    Endpoints in eine gemeinsame Funktion extrahieren, die sowohl fuer
+    Plain als auch TLS verwendet wird. Nur die Transport-Schicht (TLS
+    vs. Plain) unterscheiden, nicht die Handler.
+
+  Test:
+    Automatisierter Test der prueft, dass alle Endpoints in beiden
+    Branches identische Auth-Guards haben.
+
+----------------------------------------------------------------------
+[x] F2 — apply_mint_with_index mutiert State ueber HTTP
+----------------------------------------------------------------------
+  Modul:      phantom-node
+  Datei:      crates/phantom-node/src/main.rs
+  Zeilen:     (~Z.3200-3400, /state/apply_mint_with_index Endpoint)
+  Confidence: high
+
+  Risiko:
+    Der Endpoint /state/apply_mint_with_index erlaubt es, Mint-Events
+    direkt auf den lokalen State anzuwenden. Wenn Auth fehlt oder
+    umgangen wird → beliebige Mint-Events koennen injiziert werden.
+
+  Fix:
+    Endpoint nur ueber Loopback erlauben oder mit starkem Auth-Guard
+    schuetzen. Idealerweise komplett entfernen und nur interne
+    Funktionsaufrufe nutzen.
+
+  Test:
+    Versuch, den Endpoint von einer Remote-IP aufzurufen → muss 403
+    liefern.
+
+----------------------------------------------------------------------
+[x] F3 — Metrics-Endpoint auf Non-Loopback ohne Auth
+----------------------------------------------------------------------
+  Modul:      phantom-node
+  Datei:      crates/phantom-node/src/main.rs
+  Zeilen:     (~Z.8000-8100, run_p2p_metrics_serve)
+  Confidence: high
+
+  Risiko:
+    Metrics-Endpoint laeuft standardmaessig nur auf Loopback, aber die
+    Bindung wird nicht erzwungen wenn der User eine andere Adresse
+    angibt. Metriken enthalten sensible Daten (Validator-Status,
+    Mempool-Groesse, Peer-Anzahl).
+
+  Fix:
+    Erzwingen, dass Metrics nur auf 127.0.0.1/::1 bindet, oder Auth
+    verlangen bei Non-Loopback.
+
+  Test:
+    Metrics-Server auf 0.0.0.0 starten → muss abgelehnt werden oder
+    Auth verlangen.
+
+----------------------------------------------------------------------
+[x] F17 — Seed-Reservation Race vor File-Lock (mint_rpc.rs)
+----------------------------------------------------------------------
+  Modul:      mint_rpc (Modul)
+  Datei:      crates/phantom-node/src/mint_rpc.rs
+  Zeilen:     (~Z.200-280)
+  Confidence: med
+
+  Risiko:
+    Die PoW-Seed-Reservierung erfolgt vor dem File-Lock. Bei parallelen
+    Requests kann derselbe Seed zweimal reserviert werden → Replay.
+
+  Fix:
+    Seed-Reservierung innerhalb des Lock-Scopes verschieben.
+
+  Test:
+    Parallele Mint-Submissions mit gleichem Seed → nur eine darf
+    akzeptiert werden.
+
+----------------------------------------------------------------------
+[x] F19 — Standalone mint_rpc persistiert Mint NICHT → nie propagiert
+----------------------------------------------------------------------
+  Modul:      bin/mint_rpc (Standalone Binary)
+  Datei:      crates/phantom-node/src/bin/mint_rpc.rs
+  Zeilen:     (~Z.400-500, handle_mint_submit)
+  Confidence: high
+
+  Risiko:
+    Im Standalone-Binary wird ein akzeptierter Mint zwar im SupplyState
+    angewendet, aber NICHT als .bin-Datei ins Mempool-Verzeichnis
+    geschrieben. Der Node-Process, der das Mempool-Dir ueberwacht,
+    sieht den Mint nie → er wird nie ueber P2P propagiert und nie in
+    den Konsensus aufgenommen.
+
+  Fix:
+    Nach Akzeptanz den Mint als .bin-Datei in --mempool-dir schreiben,
+    analog zum Modul mint_rpc.rs.
+
+  Test:
+    Mint ueber Standalone-Binary submitten → pruefen, dass .bin-Datei
+    im mempool-dir erscheint.
+
+----------------------------------------------------------------------
+[x] F20 — Standalone mint_rpc: Keine Seed-Reservation → Replay
+----------------------------------------------------------------------
+  Modul:      bin/mint_rpc (Standalone Binary)
+  Datei:      crates/phantom-node/src/bin/mint_rpc.rs
+  Zeilen:     (~Z.400-500)
+  Confidence: high
+
+  Risiko:
+    Die Seed-Reservierungslogik fehlt komplett im Standalone-Binary.
+    Ein Angreifer kann denselben PoW-Seed mehrfach einreichen.
+
+  Fix:
+    Seed-Reservierung implementieren, analog zum Modul mint_rpc.rs.
+
+  Test:
+    Gleichen Mint zweimal submitten → zweiter muss abgelehnt werden.
+
+----------------------------------------------------------------------
+[x] F24 — --secret-hex leakt Key in Prozessliste
+----------------------------------------------------------------------
+  Modul:      phantom-signer
+  Datei:      crates/phantom-signer/src/main.rs
+  Zeilen:     ~Z.1127-1154 (Commands::Import)
+  Confidence: high
+
+  Risiko:
+    --secret-hex <32-byte-hex> wird als CLI-Argument uebergeben und ist
+    in `ps aux` / `/proc/<pid>/cmdline` sichtbar. Jeder lokale Nutzer
+    kann den Secret Key lesen.
+
+  Fix:
+    --secret-hex durch --secret-file oder --secret-env ersetzen. In
+    Release-Builds ablehnen (analog zum bestehenden --auth-token Guard
+    in resolve_auth_token Z.268).
+
+  Test:
+    --secret-hex in Release-Build → muss mit klarem Fehler abgelehnt
+    werden.
+
+----------------------------------------------------------------------
+[x] F25 — Seed-Anzeige auf stderr ohne TTY-Check → Log-Leak
+----------------------------------------------------------------------
+  Modul:      phantom-signer
+  Datei:      crates/phantom-signer/src/main.rs
+  Zeilen:     ~Z.4919-4934 (Commands::WalletInit)
+  Confidence: high
+
+  Risiko:
+    Die 24 Seed-Woerter werden via eprintln! ausgegeben. Wenn stderr
+    in ein Logfile umgeleitet wird (CI, Systemd-Journal, Daemon-Mode),
+    landen die Seed-Woerter persistent im Klartext.
+
+  Fix:
+    Vor der Seed-Ausgabe pruefen, ob stderr ein Terminal ist:
+      std::io::stderr().is_terminal()
+    Falls kein TTY → abbrechen mit Fehler.
+
+  Test:
+    WalletInit mit stderr in Datei umgeleitet → muss abbrechen.
+
+----------------------------------------------------------------------
+[x] F38 — HSM Vote-Domain weicht von main.rs ab → ungueltige Signaturen
+----------------------------------------------------------------------
+  Modul:      pkcs11_sign
+  Datei:      crates/phantom-signer/src/pkcs11_sign.rs
+  Zeilen:     Z.122-132 (seat_vote_sign_with_hsm)
+  Confidence: high
+
+  Risiko:
+    Die Vote-Message in pkcs11_sign.rs verwendet:
+      Domain: b"SV"
+      round:  u16 (2 bytes)
+    Waehrend main.rs (Z.3287-3294) verwendet:
+      Domain: b"pc:vote:seat:v1\x01"
+      round:  u64 (8 bytes)
+    Die Messages sind komplett verschieden — eine HSM-Signatur wird von
+    keinem Verifier akzeptiert.
+
+  Fix:
+    SeatVote PKCS#11 HSM-Signing fail-closed deaktivieren, bis ein
+    PKCS#11-Mechanismus fuer die protokoll-erforderlichen Schnorr-
+    Signaturen verfuegbar ist. Der bisherige PKCS#11 ECDSA-Mechanismus
+    kann keine gueltigen SeatVote-Signaturen erzeugen; eine "falsche"
+    Signatur darf nie im System entstehen (Consensus-Safety).
+
+  Test:
+    Unit-Test: seat_vote_sign_with_hsm muss fail-closed abbrechen und
+    darf keine Signatur liefern.
+
+================================================================================
+  P1 — HOCH (20 Findings)
+================================================================================
+
+----------------------------------------------------------------------
+[x] F4 — Journal-Append nicht atomar
+----------------------------------------------------------------------
+  Modul:      phantom-node
+  Datei:      crates/phantom-node/src/main.rs
+  Zeilen:     (~Z.5700-5750, journal_append)
+  Confidence: med
+
+  Risiko:
+    journal_append schreibt direkt in die Datei. Bei Crash zwischen
+    Write und Flush → korrupter Journal-Eintrag. Beim naechsten Start
+    wird der letzte Eintrag teilweise gelesen → Parse-Fehler oder
+    verlorene TX.
+
+  Fix:
+    Length-Prefix + CRC32-Checksumme pro Eintrag. Beim Lesen korrupte
+    Tail-Eintraege verwerfen.
+
+  Test:
+    Simulierter Crash nach partiellem Write → Journal muss beim
+    naechsten Start korrekt geladen werden (ohne den korrupten
+    Eintrag).
+
+----------------------------------------------------------------------
+[x] F5 — Mempool-Eviction O(n) sort bei jedem Insert
+----------------------------------------------------------------------
+  Modul:      phantom-node
+  Datei:      crates/phantom-node/src/main.rs
+  Zeilen:     (~Z.10800-10900)
+  Confidence: med
+
+  Risiko:
+    Bei Kapazitaetsueberschreitung wird der gesamte Mempool sortiert,
+    um den aeltesten Eintrag zu finden. Bei grossem Mempool ist das
+    O(n log n) pro Insert → DoS-Vektor bei Flood.
+
+  Fix:
+    BTreeMap oder Priority Queue fuer age-basierte Eviction.
+
+  Test:
+    Benchmark: 100k TX Insert mit vollem Mempool → Laufzeit messen.
+
+----------------------------------------------------------------------
+[x] F6 — Proposer hat keinen Random-Jitter
+----------------------------------------------------------------------
+  Modul:      phantom-node
+  Datei:      crates/phantom-node/src/main.rs
+  Zeilen:     (~Z.10500, Proposer-Tick)
+  Confidence: med
+
+  Risiko:
+    Alle Nodes proposen im gleichen Intervall. Ohne Jitter senden alle
+    Proposer gleichzeitig → Netzwerk-Burst und Collisions.
+
+  Fix:
+    Zufaelligen Jitter (z.B. 0-500ms) zum Proposer-Intervall addieren.
+
+  Test:
+    Mehrere Nodes starten → Propose-Zeitpunkte muessen verteilt sein.
+
+----------------------------------------------------------------------
+[x] F7 — P2P Peer-Discovery nutzt mutable Vektor ohne Lock
+----------------------------------------------------------------------
+  Modul:      phantom-node
+  Datei:      crates/phantom-node/src/main.rs
+  Zeilen:     (~Z.9200-9300)
+  Confidence: low
+
+  Risiko:
+    Peer-Liste wird in einem Tokio-Task mutiert. Zwar ist Tokio
+    single-threaded pro Task, aber bei mehreren Tokio-Worker-Threads
+    koennte es zu Data-Races kommen.
+
+  Fix:
+    Arc<Mutex<Vec>> oder DashSet verwenden.
+
+  Test:
+    Tokio mit multi_thread Runtime + parallele Peer-Updates → kein
+    Crash.
+
+----------------------------------------------------------------------
+[x] F8 — PoW-Miner blockiert bei nicht-finalem prev_mint_id
+----------------------------------------------------------------------
+  Modul:      phantom-node
+  Datei:      crates/phantom-node/src/main.rs
+  Zeilen:     (~Z.9400-9500, PoW Miner Task)
+  Confidence: med
+
+  Risiko:
+    Der Miner wartet auf einen finalen prev_mint_id. Wenn die Chain
+    stecken bleibt (z.B. kein Konsens), wartet der Miner endlos →
+    keine neuen Mints.
+
+  Fix:
+    Timeout mit Fallback auf letzten bekannten finalen Mint.
+
+  Test:
+    Miner starten ohne finalen Block → muss nach Timeout mit Fallback
+    weitermachen.
+
+----------------------------------------------------------------------
+[x] F21 — Standalone mint_rpc: SupplyState Mutex statt atomarer Persist
+----------------------------------------------------------------------
+  Modul:      bin/mint_rpc
+  Datei:      crates/phantom-node/src/bin/mint_rpc.rs
+  Zeilen:     (~Z.350-400)
+  Confidence: med
+
+  Risiko:
+    SupplyState wird im Mutex gehalten und direkt persistiert. Bei
+    Crash zwischen Mutex-Update und Persist → inkonsistenter State.
+
+  Fix:
+    Write-Ahead-Log oder atomares File-Write (tmpfile + rename).
+
+  Test:
+    Simulierter Crash nach Mutex-Update → State muss konsistent sein.
+
+----------------------------------------------------------------------
+[x] F22 — Standalone mint_rpc: --mempool-dir Warnung aber kein Enforce
+----------------------------------------------------------------------
+  Modul:      bin/mint_rpc
+  Datei:      crates/phantom-node/src/bin/mint_rpc.rs
+  Zeilen:     (~Z.100-120)
+  Confidence: low
+
+  Risiko:
+    Wenn --mempool-dir vom Default abweicht, wird nur gewarnt. Der
+    User koennte ein falsches Verzeichnis verwenden → Mints landen
+    im falschen Ordner.
+
+  Fix:
+    Fehler statt Warnung, oder zumindest --force Flag verlangen.
+
+  Test:
+    --mempool-dir=/tmp/wrong → muss Fehler oder Warnung mit --force
+    Hinweis liefern.
+
+----------------------------------------------------------------------
+[x] F26 — HWI SignMessage → Argument-Injection
+----------------------------------------------------------------------
+  Modul:      phantom-signer
+  Datei:      crates/phantom-signer/src/main.rs
+  Zeilen:     ~Z.2797-2825 (Commands::HwiSignMessage)
+  Confidence: med
+
+  Risiko:
+    Die Nachricht (--message) wird als CLI-Argument an den externen
+    `hwi` Befehl uebergeben. Bei speziellen Nachrichten (z.B. mit
+    "--" Prefix) → Argument-Injection.
+
+  Fix:
+    Nachricht ueber stdin an hwi uebergeben oder als temporaere Datei.
+    Alternativ: Nachricht vor Uebergabe auf ASCII/UTF-8 ohne
+    Steuerzeichen validieren.
+
+  Test:
+    Nachricht mit "--malicious-flag" → darf nicht als Flag
+    interpretiert werden.
+
+----------------------------------------------------------------------
+[x] F27 — BitBox2 Signer ENV relativer Pfad → Binary Planting
+----------------------------------------------------------------------
+  Modul:      phantom-signer
+  Datei:      crates/phantom-signer/src/main.rs
+  Zeilen:     ~Z.3100-3106 (Commands::HwiSignTx, PHANTOM_BITBOX2_SIGNER)
+  Confidence: med
+
+  Risiko:
+    env::var("PHANTOM_BITBOX2_SIGNER") wird direkt als PathBuf::from(p)
+    ohne Absolute-Pfad-Check verwendet. Im Gegensatz zu
+    resolve_hwi_binary() (Z.193-256), das im Release absolute Pfade
+    erzwingt, fehlt hier diese Haertung.
+
+  Fix:
+    Gleiche Haertung wie resolve_hwi_binary: in Release-Builds absolute
+    Pfade erzwingen, Executable-Check.
+
+  Test:
+    Relativer Pfad in PHANTOM_BITBOX2_SIGNER + Release-Build → muss
+    abgelehnt werden.
+
+----------------------------------------------------------------------
+[x] F28 — Keystore-Write nicht atomar
+----------------------------------------------------------------------
+  Modul:      phantom-signer
+  Datei:      crates/phantom-signer/src/main.rs
+  Zeilen:     ~Z.1991-2010 (save_keystore)
+  Confidence: med
+
+  Risiko:
+    File::create + write_all schreibt direkt in die Zieldatei. Bei
+    Crash zwischen create (truncates!) und write_all → leere oder
+    korrupte Keystore-Datei. Der Secret Key ist dann verloren.
+
+  Fix:
+    Atomares Schreiben: tmpfile + fsync + rename. Gleicher Fix auch
+    fuer save_seed_store_encrypted und save_xpub_store (siehe F30).
+
+  Test:
+    Simulierter Crash nach create → Keystore muss entweder alt oder
+    neu sein, nie leer.
+
+----------------------------------------------------------------------
+[x] F29 — WalletSend UTXO-Race (UX)
+----------------------------------------------------------------------
+  Modul:      phantom-signer
+  Datei:      crates/phantom-signer/src/main.rs
+  Zeilen:     ~Z.3942-3965 (Commands::WalletSend, UTXO-Selektion)
+  Confidence: low
+
+  Risiko:
+    UTXOs werden vom Node abgerufen und lokal selektiert. Zwischen
+    UTXO-Abruf und Broadcast kann ein anderer Client denselben UTXO
+    verbrauchen. Der Node lehnt ab, aber der User bekommt nur einen
+    generischen Broadcast-Fehler.
+
+  Fix:
+    Im Broadcast-Fehler-Fall den spezifischen Fehler (Double-Spend)
+    aus der Node-Antwort extrahieren und klar anzeigen.
+
+  Test:
+    Zwei wallet-send gleichzeitig mit gleichem UTXO → klarer Fehler
+    statt generischer Meldung.
+
+----------------------------------------------------------------------
+[x] F30 — Seed-/XpubStore-Write nicht atomar
+----------------------------------------------------------------------
+  Modul:      phantom-signer
+  Datei:      crates/phantom-signer/src/main.rs
+  Zeilen:     Z.545-595 (save_seed_store_encrypted),
+              Z.625-676 (save_xpub_store_with_passphrase)
+  Confidence: med
+
+  Risiko:
+    Gleicher Bug wie F28 — direktes Schreiben in Zieldatei. Beim
+    Seed-Store ist der Impact noch gravierender: korrupter Seed-Store =
+    unwiederbringlicher Seed-Verlust (wenn Mnemonic nicht notiert).
+
+  Fix:
+    Atomic-Write-Pattern (tmpfile → fsync → rename).
+
+  Test:
+    Simulierter Crash → Seed-Store muss intakt sein.
+
+----------------------------------------------------------------------
+[x] F31 — XpubStore Auto-Migration ohne Backup
+----------------------------------------------------------------------
+  Modul:      phantom-signer
+  Datei:      crates/phantom-signer/src/main.rs
+  Zeilen:     ~Z.2107-2191 (load_xpub_store, Migration)
+  Confidence: med
+
+  Risiko:
+    Legacy-XpubStore wird geladen, verschluesselt, und direkt in die
+    gleiche Datei zurueckgeschrieben (Z.2177-2189). Kein Backup. Bei
+    Crash zwischen Schreiben und Fertigstellung → Datenverlust.
+
+  Fix:
+    Backup der alten Datei vor Migration (.bak-Suffix) + atomares
+    Schreiben.
+
+  Test:
+    Migration mit simuliertem Crash → .bak muss existieren und
+    wiederherstellbar sein.
+
+----------------------------------------------------------------------
+[x] F39 — PayJoin validiert Sender-Outputs nicht → Fund-Theft
+----------------------------------------------------------------------
+  Modul:      payjoin
+  Datei:      crates/phantom-signer/src/payjoin.rs
+  Zeilen:     Z.227-296 (validate_payjoin_response)
+  Confidence: high
+
+  Risiko:
+    Die Validierung prueft resp_total >= orig_total (Summe der Outputs).
+    Aber es wird NICHT geprueft, dass die spezifischen Sender-Outputs
+    (Empfaengeradresse + Betrag) erhalten bleiben. Ein boesartiger
+    Responder kann die Outputs komplett ersetzen — solange die Summe
+    stimmt.
+
+  Fix:
+    Pruefen, dass mindestens ein Output mit dem originalen Lock und
+    amount >= original vorhanden ist. BIP78-Pflicht: "Sender's output
+    must not decrease."
+
+  Test:
+    Responder ersetzt Sender-Output durch eigene Adresse → muss
+    abgelehnt werden.
+
+----------------------------------------------------------------------
+[x] F40 — PayJoin Duplicate-Amount-Check blockiert legitime TXs
+----------------------------------------------------------------------
+  Modul:      payjoin
+  Datei:      crates/phantom-signer/src/payjoin.rs
+  Zeilen:     Z.67-76 (validate_no_zero_change)
+  Confidence: high
+
+  Risiko:
+    Die Funktion lehnt jeden TX ab, der zwei Outputs mit gleichem
+    Betrag hat. Bei PayJoin ist es aber gerade das Ziel, dass Sender
+    und Empfaenger aehnliche/gleiche Betraege beisteuern (Privacy-Gain).
+
+  Fix:
+    Constraint ueberdenken. BIP78 erlaubt explizit gleiche Output-
+    Betraege; das ist sogar die bevorzugte Privacy-Eigenschaft.
+
+  Test:
+    PayJoin mit gleichen Output-Betraegen → muss akzeptiert werden.
+
+----------------------------------------------------------------------
+[x] F41 — walletdb enc_key nicht zeroized bei Drop
+----------------------------------------------------------------------
+  Modul:      walletdb
+  Datei:      crates/phantom-signer/src/walletdb.rs
+  Zeilen:     Z.81-86 (struct WalletDb)
+  Confidence: med
+
+  Risiko:
+    enc_key: [u8; 32] wird im Speicher gehalten und beim Drop nicht
+    ueberschrieben. Bei Crash-Dumps, Swap oder forensischer Analyse
+    koennte der Key extrahiert werden.
+
+  Fix:
+    impl Drop for WalletDb { fn drop(&mut self) { self.enc_key.zeroize(); } }
+    Dependency `zeroize` ist bereits im Projekt vorhanden.
+
+  Test:
+    Code-Review: Drop-Implementierung vorhanden und zeroize() aufgerufen.
+
+----------------------------------------------------------------------
+[x] F42 — walletdb: Kein Passphrase-Verifikationsmarker
+----------------------------------------------------------------------
+  Modul:      walletdb
+  Datei:      crates/phantom-signer/src/walletdb.rs
+  Zeilen:     Z.172-292 (open_locked)
+  Confidence: med
+
+  Risiko:
+    Es gibt keinen Mechanismus um zu erkennen, ob die eingegebene
+    Passphrase korrekt ist. Eine falsche Passphrase erzeugt einen
+    falschen enc_key → Decrypt schlaegt fehl mit generischem "decrypt
+    failed". Aber bei neuer (leerer) DB wird der falsche Key akzeptiert
+    und Daten werden damit verschluesselt.
+
+  Fix:
+    Bei Init einen bekannten Marker-Wert (z.B. b"walletdb_v1_check")
+    verschluesselt speichern. Bei open_locked diesen Marker decrypten
+    und pruefen → falsche Passphrase sofort erkannt.
+
+  Test:
+    open_locked mit falscher Passphrase → klarer Fehler statt
+    generischem "decrypt failed".
+
+----------------------------------------------------------------------
+[x] F48 — pc-store: read_all ohne Groessenlimit → OOM-DoS
+----------------------------------------------------------------------
+  Modul:      pc-store
+  Datei:      crates/pc-store/src/lib.rs
+  Zeilen:     Z.144-149 (read_all / read_to_end)
+  Confidence: high
+
+  Risiko:
+    read_to_end liest beliebig grosse Dateien in den Speicher. Eine
+    korrupte oder boesartig grosse .bin-Datei im Store-Verzeichnis
+    kann OOM ausloesen.
+
+  Fix:
+    Vor dem Lesen metadata().len() pruefen und gegen MAX_HEADER_BYTES /
+    MAX_PAYLOAD_BYTES begrenzen:
+      let meta = fs::metadata(path)?;
+      if meta.len() > MAX_PAYLOAD_BYTES as u64 { return Err(...); }
+
+  Test:
+    Unit-Test mit einer Datei > MAX_PAYLOAD_BYTES → erwartet Err.
+
+----------------------------------------------------------------------
+[x] F49 — pc-codec: bool::decode akzeptiert Non-Canonical → Consensus-Split
+----------------------------------------------------------------------
+  Modul:      pc-codec
+  Datei:      crates/pc-codec/src/lib.rs
+  Zeilen:     Z.142-146 (impl Decodable for bool)
+  Confidence: high
+
+  Risiko:
+    u8::decode(r)? != 0 behandelt 0x02..0xFF als true. Das ist nicht
+    kanonisch. Zwei Nodes koennten identische Daten unterschiedlich
+    re-encodieren → verschiedene Hashes → Consensus-Split.
+
+  Fix:
+    Nur 0 und 1 akzeptieren:
+      match u8::decode(r)? {
+          0 => Ok(false),
+          1 => Ok(true),
+          other => Err(CodecError::InvalidTag(other)),
+      }
+
+  Test:
+    decode_exact::<bool>(&[0x02]) muss Err(InvalidTag(2)) liefern.
+
+----------------------------------------------------------------------
+[x] F50 — phantom-miner-gui: Tokio-Runtime pro Mining-Iteration
+----------------------------------------------------------------------
+  Modul:      phantom-miner-gui
+  Datei:      crates/phantom-miner-gui/src/main.rs
+  Zeilen:     Z.598-639 (Mining-Thread-Loop)
+  Confidence: high
+
+  Risiko:
+    Jeder Mining-Thread erstellt pro Batch eine neue
+    tokio::runtime::Runtime nur um current_seed zu lesen und Events
+    zu senden. Das erzeugt tausende kurzlebige Runtimes/Sekunde →
+    extreme CPU/Memory-Verschwendung, potentieller OOM unter Last.
+
+  Fix:
+    current_seed ueber std::sync::RwLock statt tokio::sync::RwLock
+    teilen. Events ueber std::sync::mpsc statt tokio::sync::mpsc
+    senden. Alternativ: Arc<RwLock<[u8;32]>> (std) verwenden.
+
+  Test:
+    Hashrate-Benchmark vor/nach Refactor vergleichen.
+
+================================================================================
+  P2 — MITTEL / HARDENING (26 Findings)
+================================================================================
+
+----------------------------------------------------------------------
+[x] F9 — StatusServeArgs Default-Bind 0.0.0.0
+----------------------------------------------------------------------
+  Modul:      phantom-node
+  Datei:      crates/phantom-node/src/main.rs
+  Zeilen:     (~Z.5500, StatusServeArgs)
+  Confidence: med
+
+  Risiko:
+    Default-Bind ist 0.0.0.0 → Status-Server ist von aussen
+    erreichbar wenn keine Firewall vorhanden.
+
+  Fix:
+    Default auf 127.0.0.1 aendern.
+
+----------------------------------------------------------------------
+[x] F10 — Hardcoded MAX_PAYLOAD_MICROTX
+----------------------------------------------------------------------
+  Modul:      phantom-node
+  Datei:      crates/phantom-node/src/main.rs
+  Confidence: low
+
+  Risiko:
+    MAX_PAYLOAD_MICROTX ist hardcoded. Bei Aenderungen am Konsensus-
+    Protokoll muss dieser Wert manuell synchronisiert werden.
+
+  Fix:
+    Wert aus Konsensus-Config oder Genesis-Parametern ableiten.
+
+----------------------------------------------------------------------
+[x] F11 — read_hex32_files_in kein Size-Limit
+----------------------------------------------------------------------
+  Modul:      phantom-node
+  Datei:      crates/phantom-node/src/main.rs
+  Confidence: low
+
+  Risiko:
+    Alle Dateien in einem Verzeichnis werden gelesen, ohne Limit.
+    Ein Angreifer der Schreibzugriff auf das Verzeichnis hat, kann
+    riesige Dateien platzieren → OOM.
+
+  Fix:
+    Dateien auf erwartete Groesse (64 hex chars + newline) begrenzen.
+
+----------------------------------------------------------------------
+[x] F12 — DB-Repair/Reset ohne Confirmation
+----------------------------------------------------------------------
+  Modul:      phantom-node
+  Datei:      crates/phantom-node/src/main.rs
+  Confidence: low
+
+  Risiko:
+    db reset loescht die Datenbank ohne Bestaetigung.
+
+  Fix:
+    --yes Flag oder interaktive Bestaetigung.
+
+----------------------------------------------------------------------
+[x] F13 — Atomic-Counter Relaxed Ordering
+----------------------------------------------------------------------
+  Modul:      phantom-node
+  Datei:      crates/phantom-node/src/main.rs
+  Confidence: low
+
+  Risiko:
+    Metriken verwenden Relaxed Ordering. Fuer reine Zaehler OK, aber
+    wenn Werte als Entscheidungsgrundlage verwendet werden → potentiell
+    veraltete Werte.
+
+  Fix:
+    Dokumentieren, dass Relaxed fuer Metriken ausreicht. Falls
+    Entscheidungen davon abhaengen → Acquire/Release verwenden.
+
+----------------------------------------------------------------------
+[x] F14 — P2P-Forward Task unbounded Channel
+----------------------------------------------------------------------
+  Modul:      phantom-node
+  Datei:      crates/phantom-node/src/main.rs
+  Confidence: low
+
+  Risiko:
+    tokio::sync::broadcast mit fester Kapazitaet, aber der Consumer
+    kann bei Ueberlauf Nachrichten verlieren (Lagged).
+
+  Fix:
+    Metriken fuer Lagged-Events exportieren. Kapazitaet konfigurierbar
+    machen.
+
+----------------------------------------------------------------------
+[x] F15 — backup_dir keine Fehlerbehandlung
+----------------------------------------------------------------------
+  Modul:      phantom-node
+  Datei:      crates/phantom-node/src/main.rs
+  Confidence: low
+
+  Risiko:
+    Fehler bei Backup-Erstellung werden ignoriert.
+
+  Fix:
+    Fehler loggen und als Warning ausgeben.
+
+----------------------------------------------------------------------
+[x] F23 — Standalone mint_rpc: Connection Semaphore hart 128
+----------------------------------------------------------------------
+  Modul:      bin/mint_rpc
+  Datei:      crates/phantom-node/src/bin/mint_rpc.rs
+  Confidence: low
+
+  Risiko:
+    Max 128 gleichzeitige Connections. Nicht konfigurierbar.
+
+  Fix:
+    CLI-Parameter --max-connections einfuehren.
+
+----------------------------------------------------------------------
+[x] F32 — validate_passphrase prueft nur Mindestlaenge
+----------------------------------------------------------------------
+  Modul:      phantom-signer
+  Datei:      crates/phantom-signer/src/main.rs
+  Zeilen:     ~Z.1881-1888
+  Confidence: low
+
+  Risiko:
+    Nur chars().count() >= 8. Keine Entropie-Pruefung, keine Pruefung
+    auf haeufige Passwoerter.
+
+  Fix:
+    Optional: Warnung (nicht Fehler) bei rein numerischen oder zu
+    einfachen Passphrases.
+
+----------------------------------------------------------------------
+[x] F33 — Config auth_token im TOML (Klartext)
+----------------------------------------------------------------------
+  Modul:      phantom-signer
+  Datei:      crates/phantom-signer/src/main.rs
+  Zeilen:     ~Z.160-167 (SignerConfig)
+  Confidence: low
+
+  Risiko:
+    auth_token als Klartext in TOML-Config. Kein Permission-Check auf
+    die Config-Datei.
+
+  Fix:
+    Warnung wenn Config-Datei world-readable. Bevorzuge auth_token_file.
+
+----------------------------------------------------------------------
+[x] F34 — Boilerplate Node-URL/Auth/TLS Resolution
+----------------------------------------------------------------------
+  Modul:      phantom-signer
+  Datei:      crates/phantom-signer/src/main.rs
+  Confidence: low
+
+  Risiko:
+    ~20-Zeilen-Block wird in jedem RPC-Command identisch dupliziert
+    (node_final, auth_final, tls_ca_final, tls_client_pem_final).
+    Fehler/Verbesserung muss an >10 Stellen eingepflegt werden.
+
+  Fix:
+    In eine struct ResolvedNodeConfig + fn resolve_node_config(...)
+    extrahieren.
+
+----------------------------------------------------------------------
+[x] F35 — BIP39-Passphrase immer leer
+----------------------------------------------------------------------
+  Modul:      phantom-signer
+  Datei:      crates/phantom-signer/src/main.rs
+  Zeilen:     Z.601 (derive_xpub_from_mnemonic), Z.2301
+  Confidence: high (bewusstes Design)
+
+  Risiko:
+    Die BIP39-Passphrase ist immer "" (leerer String). Wer die 24
+    Woerter kennt, kann ohne weitere Passphrase alle Keys ableiten.
+    Das ist eine bewusste Design-Entscheidung (Encryption-Passphrase
+    schuetzt den Seed-Store), aber sollte dokumentiert sein.
+
+  Fix:
+    Dokumentation: "BIP39-Passphrase ist leer; der Seed-Store wird
+    durch die Encryption-Passphrase geschuetzt."
+
+----------------------------------------------------------------------
+[x] F36 — PayJoin Derivation-Placeholder
+----------------------------------------------------------------------
+  Modul:      phantom-signer
+  Datei:      crates/phantom-signer/src/main.rs
+  Zeilen:     ~Z.3395-3400 (Commands::PayjoinRespond)
+  Confidence: med
+
+  Risiko:
+    Alle hinzugefuegten Inputs bekommen denselben Dummy-Derivationpfad
+    "m/86'/12345'/0'/0/0". Bei echtem Signing wuerde der falsche Key
+    verwendet.
+
+  Fix:
+    Derivationpfade aus der Wallet-DB oder als CLI-Parameter uebergeben.
+
+----------------------------------------------------------------------
+[x] F37 — lock_from_pc_address hardcoded HRP "pc"
+----------------------------------------------------------------------
+  Modul:      phantom-signer
+  Datei:      crates/phantom-signer/src/main.rs
+  Zeilen:     ~Z.2205-2227
+  Confidence: med
+
+  Risiko:
+    Funktion lehnt jede Adresse ab, deren HRP nicht "pc" ist. Bei
+    Testnet/Regtest mit anderem HRP → Wallet unbrauchbar.
+
+  Fix:
+    HRP aus XpubStore oder CLI-Parameter verwenden, nicht hardcoded.
+
+----------------------------------------------------------------------
+[x] F43 — PayJoin URI kein URL-Decoding
+----------------------------------------------------------------------
+  Modul:      payjoin
+  Datei:      crates/phantom-signer/src/payjoin.rs
+  Zeilen:     Z.352-378 (parse_pc_uri)
+  Confidence: low
+
+  Risiko:
+    Query-Parameter werden nicht URL-decoded. PayJoin-Endpoint mit
+    URL-kodierten Zeichen wird falsch geparst.
+
+  Fix:
+    urlencoding::decode() auf die Values anwenden.
+
+----------------------------------------------------------------------
+[x] F44 — PayJoin Endpoint nicht HTTPS-validiert
+----------------------------------------------------------------------
+  Modul:      payjoin
+  Datei:      crates/phantom-signer/src/payjoin.rs
+  Zeilen:     Z.113-139 (initiate_payjoin)
+  Confidence: med
+
+  Risiko:
+    endpoint kann beliebigen String enthalten (auch http://). PayJoin-
+    Requests enthalten die unsignierte TX → MitM kann TX-Details lesen.
+
+  Fix:
+    Pruefung, dass Endpoint https:// oder Loopback ist.
+
+----------------------------------------------------------------------
+[x] F45 — PKCS#11 kein Logout bei Fehler
+----------------------------------------------------------------------
+  Modul:      pkcs11_sign
+  Datei:      crates/phantom-signer/src/pkcs11_sign.rs
+  Zeilen:     Z.28-93 (sign_with_hsm)
+  Confidence: low
+
+  Risiko:
+    session.logout().ok() wird nur am Ende aufgerufen. Wenn
+    session.sign() fehlschlaegt, bleibt Session eingeloggt bis Drop.
+
+  Fix:
+    session.logout() in scopeguard oder Drop sicherstellen.
+
+----------------------------------------------------------------------
+[x] F46 — PSBT-Datei 0o644 statt 0o600
+----------------------------------------------------------------------
+  Modul:      psbt
+  Datei:      crates/phantom-signer/src/psbt.rs
+  Zeilen:     Z.130-144 (to_toml_file)
+  Confidence: med
+
+  Risiko:
+    PSBT-Dateien enthalten Derivation-Pfade und unsignierte TX-Daten.
+    Mode 0o644 erlaubt jedem lokalen Nutzer das Lesen.
+
+  Fix:
+    0o644 → 0o600 (wie Keystore/Seedstore).
+
+----------------------------------------------------------------------
+[x] F47 — Lockfile truncate vor Lock-Acquire
+----------------------------------------------------------------------
+  Modul:      slashdb + walletdb
+  Datei:      crates/phantom-signer/src/slashdb.rs Z.82-83,
+              crates/phantom-signer/src/walletdb.rs Z.181
+  Confidence: low
+
+  Risiko:
+    Lockfile wird mit truncate(true) geoeffnet BEVOR der Lock erworben
+    wird. Race: Prozess A haelt Lock, Prozess B oeffnet Datei
+    (truncates PID), versucht Lock, scheitert. Aber A's PID ist weg.
+
+  Fix:
+    truncate(false), erst nach erfolgreichem Lock truncaten (was
+    bereits in Z.98 lock_file.set_len(0) gemacht wird).
+
+----------------------------------------------------------------------
+[x] F51 — pc-store: TOCTOU bei Symlink-Pruefung
+----------------------------------------------------------------------
+  Modul:      pc-store
+  Datei:      crates/pc-store/src/lib.rs
+  Zeilen:     Z.62-95 (FileStore::open)
+  Confidence: med
+
+  Risiko:
+    Zwischen dem ersten is_symlink-Check, create_dir_all und dem
+    zweiten Check gibt es ein TOCTOU-Fenster. Ein lokaler Angreifer
+    koennte den Pfad zwischen den Checks durch einen Symlink ersetzen.
+    Durch den Double-Check bereits deutlich verengt.
+
+  Fix:
+    O_NOFOLLOW / open() + fstat statt pfadbasierter Pruefung verwenden
+    (plattformspezifisch). Alternativ: akzeptables Restrisiko
+    dokumentieren.
+
+  Test:
+    Manueller Pen-Test mit Race-Condition-Harness.
+
+----------------------------------------------------------------------
+[x] F52 — pc-crypto/bls: Legacy-PoP-Fallback schwaeecht Domain-Separation
+----------------------------------------------------------------------
+  Modul:      pc-crypto
+  Datei:      crates/pc-crypto/src/bls.rs
+  Zeilen:     Z.97-109 (bls_pop_verify)
+  Confidence: med
+
+  Risiko:
+    bls_pop_verify akzeptiert PoP-Signaturen sowohl unter DST_POP als
+    auch unter DST_SIG. Das schwaeecht die Domain-Separation: eine
+    regulaere Signatur ueber die PK-Bytes koennte als PoP akzeptiert
+    werden.
+
+  Fix:
+    Legacy-Akzeptanz mit Deprecation-Warnung versehen und nach
+    Migration-Zeitraum entfernen. Alternativ: nur DST_POP akzeptieren.
+
+  Test:
+    Sicherstellen, dass bls_sign(pk_bytes, sk) NICHT als PoP
+    akzeptiert wird (nach Fix).
+
+----------------------------------------------------------------------
+[x] F53 — pc-crypto/stealth: Feste Even-Parity-Annahme bei ECDH
+----------------------------------------------------------------------
+  Modul:      pc-crypto
+  Datei:      crates/pc-crypto/src/stealth.rs
+  Zeilen:     Z.38 (compute_shared_secret)
+  Confidence: med
+
+  Risiko:
+    PublicKey::from_x_only_public_key(scan_pk, Parity::Even) — bei
+    x-only Keys wird immer Even-Parity angenommen. Wenn externe x-only
+    Keys mit Odd-Parity kommen, schlaegt ECDH fehl (falsches Shared
+    Secret → Stealth-Zahlung geht verloren). Intern konsistent.
+
+  Fix:
+    Dokumentieren, dass die Konvention "Always Even" ist, und bei
+    Key-Import validieren.
+
+  Test:
+    Negativtest: Key mit Odd-Parity generieren, pruefen dass
+    Sender/Receiver trotzdem zum selben Shared Secret kommen.
+
+----------------------------------------------------------------------
+[x] F54 — phantom-miner-gui: Default-Adresse ohne --address → Funds-Loss
+----------------------------------------------------------------------
+  Modul:      phantom-miner-gui
+  Datei:      crates/phantom-miner-gui/src/main.rs
+  Zeilen:     Z.276-280
+  Confidence: high
+
+  Risiko:
+    Ohne --address wird [0x01, 0, ..., 0] als Mining-Ziel verwendet.
+    Geminte Coins gehen an eine nicht-spendbare Adresse → Verlust
+    geminter Coins.
+
+  Fix:
+    --address als required=true setzen, oder beim Start explizit
+    warnen/abbrechen wenn keine echte Adresse angegeben.
+
+  Test:
+    CLI-Test ohne --address → erwartet Fehler.
+
+----------------------------------------------------------------------
+[x] F55 — phantom-config: now_secs() gibt 0 bei Clock-Fehler
+----------------------------------------------------------------------
+  Modul:      phantom-config
+  Datei:      crates/phantom-config/src/lib.rs
+  Zeilen:     Z.12-17 (now_secs)
+  Confidence: low
+
+  Risiko:
+    unwrap_or_default() liefert 0 wenn SystemTime::now() vor
+    UNIX_EPOCH liegt. Wird an ValidatorControl::default_fail_closed_at(0)
+    uebergeben → potentiell falsche Zeitlogik.
+
+  Fix:
+    Fehler propagieren statt Silent-Default:
+      pub fn now_secs() -> Result<u64, String> { ... }
+
+  Test:
+    Mock-Test mit SystemTime vor UNIX_EPOCH.
+
+----------------------------------------------------------------------
+[x] F56 — bitbox02-signer: Fingerprint nur 32-Bit Collision-Resistance
+----------------------------------------------------------------------
+  Modul:      bitbox02-signer
+  Datei:      crates/bitbox02-signer/src/main.rs
+  Zeilen:     Z.571-581 (compute_fingerprint)
+  Confidence: low
+
+  Risiko:
+    Erste 4 Bytes von blake3_32(pk_bytes) → nur 2^32 moegliche Werte.
+    Fingerprint-Kollisionen ab ~65k Keys wahrscheinlich. Fingerprint
+    dient nur als Plausibilitaetscheck, nicht als kryptographische
+    Bindung. Moeglicherweise bewusste BIP32-Kompatibilitaet.
+
+  Fix:
+    Auf 8 Bytes (16 Hex-Zeichen) erweitern fuer ~2^64 Collision-
+    Resistance. Oder explizit als Design-Entscheidung dokumentieren.
+
+  Test:
+    Generiere 100k Keys, pruefe keine Fingerprint-Kollision.
+
+----------------------------------------------------------------------
+[x] F57 — phantom-miner-gui: logs.remove(0) ist O(n)
+----------------------------------------------------------------------
+  Modul:      phantom-miner-gui
+  Datei:      crates/phantom-miner-gui/src/main.rs
+  Zeilen:     Z.463
+  Confidence: high
+
+  Risiko:
+    logs.remove(0) verschiebt bei jedem Log-Eintrag alle Elemente.
+    Bei hoher Log-Frequenz und 100 Eintraegen spuerbare Performance-
+    Degradation der UI.
+
+  Fix:
+    VecDeque statt Vec verwenden.
+
+  Test:
+    Benchmark mit 10k Log-Events.
+
+================================================================================
+  RUNDE 4 — P2P, NETSIM, TUI, BITBOX-API
+  (pc-p2p, pc-netsim, phantom-tui, bitbox-api-rs)
+================================================================================
+
+----------------------------------------------------------------------
+  P0 — KRITISCH (Runde 4: 3 Findings)
+----------------------------------------------------------------------
+
+----------------------------------------------------------------------
+[x] F58 — pc-p2p: Massive Code-Duplikation im P2P-Loop (Divergenz)
+----------------------------------------------------------------------
+  Modul:      pc-p2p
+  Datei:      crates/pc-p2p/src/lib.rs
+  Zeilen:     Z.2233-4335 (run_p2p_loop)
+  Confidence: high
+
+  Risiko:
+    run_p2p_loop enthaelt ~2100 Zeilen mit DREIFACHER Wiederholung
+    der Inbound-Message-Verarbeitung (global rate, per-peer rate,
+    no-per-peer-fallback). Jeder Message-Typ (HeaderAnnounce,
+    HeadersInv, TxInv, EvidenceInv, PayloadInv, Peers, Ping, Pong,
+    Req, Resp) wird 3x fast identisch behandelt. Ein Fix in einem
+    Branch, der in den anderen vergessen wird, erzeugt silent
+    Consensus-Bugs oder Security-Bypasses.
+
+  Fix:
+    Inbound-Handling in eine generische Funktion/Methode
+    refaktorieren, die einen &mut RateLimiter-Parameter bekommt.
+    Alle drei Pfade rufen dieselbe Logik auf.
+
+  Test:
+    Property-Test: Sende dieselbe Message ueber Incoming und
+    IncomingFrom-Pfad; assert gleiche Store-Mutationen und
+    Outbox-Messages.
+
+----------------------------------------------------------------------
+[x] F59 — pc-p2p: rocksdb_store TTL-Cleanup-Assertion auskommentiert
+----------------------------------------------------------------------
+  Modul:      pc-p2p
+  Datei:      crates/pc-p2p/src/rocksdb_store.rs
+  Zeilen:     Test rocksdb_store_ttl_cleanup
+  Confidence: high
+
+  Risiko:
+    Der Test rocksdb_store_ttl_cleanup hat die Assertion fuer
+    tatsaechliches Loeschen AUSKOMMENTIERT. Wenn der TTL-Cleanup
+    nicht funktioniert, waechst die DB unbegrenzt -> Disk-Fill ->
+    Node-DoS.
+
+  Fix:
+    Assertion aktivieren und sicherstellen, dass cleanup_expired
+    korrekt loescht. Ggf. tokio::time::advance im Test nutzen.
+
+  Test:
+    rocksdb_store_ttl_cleanup mit aktivierter Assertion.
+
+----------------------------------------------------------------------
+[x] F60 — pc-p2p: dedupe_insert_capped Eviction unter adversarial Load
+----------------------------------------------------------------------
+  Modul:      pc-p2p
+  Datei:      crates/pc-p2p/src/lib.rs
+  Zeilen:     Z.2277-2308
+  Confidence: med
+
+  Risiko:
+    Bei MAX_DEDUPE_ENTRIES=200000 und DEDUPE_EVICT_SAMPLE=16 wird
+    bei jedem Insert ueber dem Limit ein Sample von 16 Eintraegen
+    geprueft und der aelteste entfernt. Edge-Case: wenn alle 16
+    Samples frischer sind als der neue Key, wird der gerade
+    eingefuegte Key selbst geloescht (drop_key.unwrap_or(key)).
+    Dann wird Dedupe nie gespeichert -> Request-Amplification.
+    Periodisches retain() bei Z.3639-3644 (60s) mildert das ab,
+    aber unter Hochlast kann die Map zwischen Cleanups wachsen.
+
+  Fix:
+    LRU-Cache statt HashMap verwenden. Oder DEDUPE_EVICT_SAMPLE
+    auf 64+ erhoehen. Alternativ: retain()-Frequenz auf 10s
+    reduzieren.
+
+  Test:
+    Benchmark mit 500k INV-Messages in 10s; assert HashMap-Size
+    <= MAX_DEDUPE_ENTRIES + epsilon.
+
+----------------------------------------------------------------------
+  P1 — HOCH (Runde 4: 6 Findings)
+----------------------------------------------------------------------
+
+----------------------------------------------------------------------
+[x] F61 — pc-p2p/libp2p_node: pending-Map hat kein Timeout
+----------------------------------------------------------------------
+  Modul:      pc-p2p
+  Datei:      crates/pc-p2p/src/libp2p_node.rs
+  Zeilen:     Z.820 (pending HashMap)
+  Confidence: med
+
+  Risiko:
+    Outbound-RPC-Requests werden in pending gespeichert. Ein Peer,
+    der keine Response sendet, laesst den Eintrag fuer immer
+    bestehen -> Memory Leak proportional zu Anfragen.
+
+  Fix:
+    Periodisch pending.retain(|_, (_, _, start)|
+    start.elapsed() < Duration::from_secs(30)) aufrufen.
+
+  Test:
+    Sende 1000 RPC-Requests ohne Response; assert pending.len()
+    nach 60s == 0.
+
+----------------------------------------------------------------------
+[x] F62 — phantom-tui/tools: arbitrary command execution (Debug)
+----------------------------------------------------------------------
+  Modul:      phantom-tui
+  Datei:      crates/phantom-tui/src/tools.rs
+  Zeilen:     Z.304-341
+  Confidence: med
+
+  Risiko:
+    Im Expert-Mode + Debug-Build koennen beliebige Kommandos als
+    Child-Prozess gestartet werden (keine Allowlist). Wenn ein
+    Debug-Build versehentlich deployed wird: Local Privilege
+    Escalation.
+
+  Fix:
+    Auch im Debug-Mode eine Allowlist verwenden oder mindestens
+    eine explizite Bestaetigung einbauen.
+
+  Test:
+    Unit-Test: im Release-Mode assert, dass run_command nur
+    Allowlist-Binaries startet.
+
+----------------------------------------------------------------------
+[x] F63 — phantom-tui/node: beliebige Binary-Pfade (Debug)
+----------------------------------------------------------------------
+  Modul:      phantom-tui
+  Datei:      crates/phantom-tui/src/node.rs
+  Zeilen:     Z.686-692
+  Confidence: med
+
+  Risiko:
+    Im Release-Build wird auf "phantom-node" gehardcoded, aber im
+    Debug-Build ist der Binary-Pfad frei editierbar. Aehnliches
+    Risiko wie F62.
+
+  Fix:
+    Auch im Debug-Build Allowlist (phantom-node, phantom-signer,
+    phantom-miner).
+
+  Test:
+    Assert: start_node mit binary="rm" -> rejected.
+
+----------------------------------------------------------------------
+[x] F64 — pc-p2p/peer_store: kein Rate-Limit auf merge (Eclipse)
+----------------------------------------------------------------------
+  Modul:      pc-p2p
+  Datei:      crates/pc-p2p/src/peer_store.rs
+  Zeilen:     Z.1-330
+  Confidence: med
+
+  Risiko:
+    merge() und add_peer() werden bei jeder Peers-Response
+    aufgerufen. Ein Angreifer mit vielen Peers kann den PeerStore
+    mit manipulierten Eintraegen fluten (bis MAX_PEERS=256),
+    wodurch legitime Peers verdraengt werden -> Eclipse-Angriff.
+
+  Fix:
+    Rate-Limit auf Merge-Frequenz pro Quelle; oder nur N neue
+    Peers pro Merge-Zyklus akzeptieren.
+
+  Test:
+    Merge 1000 Peers in 1s; assert nur <= K neue aufgenommen.
+
+----------------------------------------------------------------------
+[x] F65 — phantom-tui/wallet: Seed-Store-Pfad unsicher konstruiert
+----------------------------------------------------------------------
+  Modul:      phantom-tui
+  Datei:      crates/phantom-tui/src/wallet.rs
+  Zeilen:     Z.776
+  Confidence: med
+
+  Risiko:
+    format!("{}/../seeds/default.toml", wallet_db_path.display())
+    Path-Traversal bei manipuliertem wallet_db_path moeglich.
+    Wenn der Pfad Symlinks oder .. enthaelt, koennte ein falscher
+    Seed-Store geladen werden.
+
+  Fix:
+    wallet_db_path.parent().unwrap_or(...).join("seeds/default.toml")
+    mit Kanonisierung verwenden.
+
+  Test:
+    Setze wallet_db_path auf Pfad mit ../../../tmp/evil; assert
+    Error statt Zugriff.
+
+----------------------------------------------------------------------
+[x] F66 — pc-p2p: InMemoryStore ohne Groessenbegrenzung
+----------------------------------------------------------------------
+  Modul:      pc-p2p
+  Datei:      crates/pc-p2p/src/lib.rs
+  Zeilen:     Z.2060-2136 (InMemoryStore)
+  Confidence: med
+
+  Risiko:
+    Headers, Payloads, Txs, Evidences werden in HashMaps
+    gespeichert ohne globales Limit. Im Non-Delegate-Modus (kein
+    RocksDB) kann ein Angreifer den Speicher volllaufen lassen.
+
+  Fix:
+    Maximale Eintragsanzahl pro Map + LRU-Eviction.
+
+  Test:
+    Insert 1M Headers; assert Map-Size <= configured max.
+
+----------------------------------------------------------------------
+  P2 — MITTEL (Runde 4: 7 Findings)
+----------------------------------------------------------------------
+
+----------------------------------------------------------------------
+[x] F67 — libp2p_node: blocked_peers nicht persistiert
+----------------------------------------------------------------------
+  Modul:      pc-p2p
+  Datei:      crates/pc-p2p/src/libp2p_node.rs
+  Zeilen:     Z.866-884
+  Confidence: low
+
+  Risiko:
+    Geblockte Peers (wegen max_peers_per_ip) gehen bei Neustart
+    verloren. Ein Angreifer kann nach Restart erneut Sybil-
+    Verbindungen aufbauen.
+
+  Fix:
+    Optional: Blocked-Peers in PeerStore oder separate Datei
+    speichern mit TTL.
+
+  Test:
+    Restart-Szenario: block Peer -> restart -> assert Peer noch
+    geblockt.
+
+----------------------------------------------------------------------
+[x] F68 — pc-netsim: thread_rng() nicht reproduzierbar
+----------------------------------------------------------------------
+  Modul:      pc-netsim
+  Datei:      crates/pc-netsim/src/lib.rs
+  Zeilen:     Z.82-83
+  Confidence: high
+
+  Risiko:
+    should_drop_packet() und get_delay() nutzen thread_rng().
+    Tests die auf NetworkCondition::realistic() basieren sind
+    nicht deterministisch reproduzierbar.
+
+  Fix:
+    SimNode einen seed-Parameter geben; StdRng::seed_from_u64
+    nutzen.
+
+  Test:
+    Zweimal mit gleichem Seed laufen; assert identische
+    Drop-/Delay-Sequenz.
+
+----------------------------------------------------------------------
+[x] F69 — phantom-tui/wallet: Blocking HTTP in TUI-Thread
+----------------------------------------------------------------------
+  Modul:      phantom-tui
+  Datei:      crates/phantom-tui/src/wallet.rs
+  Zeilen:     Z.666-707
+  Confidence: high
+
+  Risiko:
+    fetch_history() nutzt reqwest::blocking::Client direkt im
+    TUI-Thread (aufgerufen aus try_unlock, refresh_history). Bei
+    langsamer Netzwerkverbindung oder Timeout (10s) friert die
+    TUI ein.
+
+  Fix:
+    fetch_history in Background-Thread via mpsc::channel
+    ausfuehren (wie node.rs es fuer Status macht).
+
+  Test:
+    Mock-Server mit 5s Delay; assert TUI bleibt responsiv.
+
+----------------------------------------------------------------------
+[x] F70 — phantom-tui/node: is_local_host und is_loopback_host identisch
+----------------------------------------------------------------------
+  Modul:      phantom-tui
+  Datei:      crates/phantom-tui/src/node.rs
+  Zeilen:     Z.22-34
+  Confidence: high
+
+  Risiko:
+    Kein Security-Risiko, aber toter Code / Copy-Paste-Fehler.
+    Zwei identische Funktionen existieren nebeneinander.
+
+  Fix:
+    Eine der beiden Funktionen entfernen, die andere ueberall
+    verwenden.
+
+  Test:
+    Grep nach Verwendung; sicherstellen nur eine Funktion genutzt.
+
+----------------------------------------------------------------------
+[x] F71 — bitbox-api-rs: Private Key nicht zeroized in NoiseConfigData
+----------------------------------------------------------------------
+  Modul:      bitbox-api-rs (3rd-party)
+  Datei:      crates/bitbox-api-rs/src/noise.rs
+  Zeilen:     Z.27-31
+  Confidence: high
+
+  Risiko:
+    app_static_privkey: Option<[u8; 32]> wird als Plain-Feld
+    gehalten und auf Disk serialisiert. Kommentar Z.28-29
+    bestaetigt: "Ideally we'd zeroize the struct field too, but
+    that is not compatible with serde."
+
+  Fix:
+    Upstream-Issue oeffnen. Workaround: secrecy::SecretVec mit
+    custom Serde-Impl.
+
+  Test:
+    Drop NoiseConfigData; scan Memory fuer Key-Bytes.
+
+----------------------------------------------------------------------
+[x] F72 — bitbox-api-rs: unwrap() in U2fHidCommunication::write
+----------------------------------------------------------------------
+  Modul:      bitbox-api-rs (3rd-party)
+  Datei:      crates/bitbox-api-rs/src/communication.rs
+  Zeilen:     Z.64
+  Confidence: high
+
+  Risiko:
+    self.u2fhid.encode(msg, &mut buf).unwrap() -- Panic bei
+    oversized Message. 3rd-party Code, aber im Phantom-Workspace
+    eingebettet.
+
+  Fix:
+    Upstream-PR: .map_err(|e| Error::Write)? statt .unwrap().
+
+  Test:
+    Sende Message > MAX_LEN; assert Error statt Panic.
+
+----------------------------------------------------------------------
+[x] F73 — phantom-tui/wallet: Passphrase im Klartext in AppState
+----------------------------------------------------------------------
+  Modul:      phantom-tui
+  Datei:      crates/phantom-tui/src/wallet.rs
+  Zeilen:     Z.189
+  Confidence: med
+
+  Risiko:
+    passphrase: String in AppState lebt solange die App laeuft.
+    Kein Zeroize bei Logout/Drop. Bei Crash-Dump waere die
+    Passphrase im Klartext sichtbar.
+
+  Fix:
+    secrecy::SecretString oder zeroize::Zeroizing<String>
+    verwenden. Bei Tab-Wechsel weg von Wallet: zeroize.
+
+  Test:
+    Drop AppState; verify Memory zeroed (Miri/Valgrind).
+
+================================================================================
+  RUNDE 5 — PC-STATE, MINER, CROSS-CRATE
+  (pc-state, phantom-miner, phantom-signer/stealth, phantom-node)
+================================================================================
+
+----------------------------------------------------------------------
+  P0 — KRITISCH (Runde 5: 1 Finding)
+----------------------------------------------------------------------
+
+----------------------------------------------------------------------
+[x] F74 — Stealth scan_stealth_payments liefert Tweak statt Spending-Key
+----------------------------------------------------------------------
+  Modul:      stealth (phantom-signer)
+  Datei:      crates/phantom-signer/src/stealth.rs
+  Zeilen:     Z.194 (scan_stealth_payments)
+  Confidence: high
+
+  Risiko:
+    scan_stealth_payments (ohne _with_spend_secret) liefert im Feld
+    stealth_secret nur den ECDH-Tweak, NICHT den tatsaechlichen
+    Spending-Key. Versuch, damit auszugeben, schlaegt fehl → Funds
+    nicht ausgebbar ueber diese API. Die Variante
+    scan_stealth_payments_with_spend_secret ist korrekt.
+
+  Fix:
+    scan_stealth_payments entweder entfernen (ist #[allow(dead_code)])
+    oder spend_secret als Pflicht-Parameter machen. Alternativ: klar
+    dokumentieren, dass nur _with_spend_secret zum Ausgeben taugt.
+
+  Test:
+    scan_stealth_payments → mit returned stealth_secret signieren
+    → muss fehlschlagen (beweist, dass der Tweak kein gueltiger
+    Spending-Key ist).
+
+----------------------------------------------------------------------
+  P1 — HOCH (Runde 5: 4 Findings)
+----------------------------------------------------------------------
+
+----------------------------------------------------------------------
+[x] F75 — pc-state: OverlayBackend::del gibt immer true zurueck
+----------------------------------------------------------------------
+  Modul:      pc-state
+  Datei:      crates/pc-state/src/lib.rs
+  Zeilen:     Z.389-392 (impl StateBackend for OverlayBackend, fn del)
+  Confidence: med
+
+  Risiko:
+    del() markiert den Key als geloescht und gibt immer true zurueck,
+    auch wenn der Key weder im Overlay noch im Base existierte. Caller,
+    die auf den Rueckgabewert vertrauen, bekommen falsch-positive
+    Ergebnisse. Derzeit wird der Wert in commit() ignoriert, aber
+    fragil bei zukuenftigen Aenderungen.
+
+  Fix:
+    Pruefen ob Key in map oder base existiert bevor true zurueckgeben:
+      fn del(&mut self, key: &OutPoint) -> bool {
+          let existed = self.map.get(key).map(|v| v.is_some())
+              .unwrap_or_else(|| self.base.get(key).is_some());
+          self.map.insert(*key, None);
+          existed
+      }
+
+  Test:
+    overlay.del(&non_existent_key) → muss false liefern.
+
+----------------------------------------------------------------------
+[x] F76 — phantom-node: readyz nutzt sync I/O im async-Kontext
+----------------------------------------------------------------------
+  Modul:      phantom-node
+  Datei:      crates/phantom-node/src/main.rs
+  Zeilen:     ~Z.2101 (/readyz Handler)
+  Confidence: high
+
+  Risiko:
+    std::fs::metadata wird synchron im Tokio-Worker-Thread aufgerufen.
+    Bei langsamen Dateisystemen (NFS, ueberlastete Disk) blockiert der
+    gesamte Worker-Thread → DoS fuer alle Requests auf diesem Thread.
+    Andere Handler (z.B. /status) nutzen korrekt spawn_blocking.
+
+  Fix:
+    std::fs::metadata in tokio::task::spawn_blocking wrappen, analog
+    zu den anderen Handlern.
+
+  Test:
+    E2E-Test mit simuliert langsamer Disk → /readyz darf den Server
+    nicht blockieren.
+
+----------------------------------------------------------------------
+[x] F77 — phantom-node: supply_state Persist-Fehler still ignoriert
+----------------------------------------------------------------------
+  Modul:      phantom-node
+  Datei:      crates/phantom-node/src/main.rs
+  Zeilen:     ~Z.585-592 (persist_supply_state_sync)
+  Confidence: med
+
+  Risiko:
+    persist_supply_state_sync kehrt bei serde_json::to_vec-Fehler
+    still zurueck (return). Kein Log, kein Fehler. Bei Crash zwischen
+    erfolgreicher Mint-Annahme und Persist ist der SupplyState
+    inkonsistent (Mint-Height / Difficulty / Total-Supply Drift).
+
+  Fix:
+    Fehler loggen (warn!) und/oder Result propagieren:
+      let data = serde_json::to_vec(&state)
+          .map_err(|e| { warn!("serialize supply_state: {e}"); e })?;
+
+  Test:
+    Inject serialize-Error → pruefen, dass Log-Warning emittiert wird.
+
+----------------------------------------------------------------------
+[x] F78 — phantom-node: committee_seed_anchor Fallback [0u8; 32]
+----------------------------------------------------------------------
+  Modul:      phantom-node
+  Datei:      crates/phantom-node/src/main.rs
+  Zeilen:     ~Z.1110-1127 (committee_seed_anchor_from_mempool)
+  Confidence: med
+
+  Risiko:
+    Wenn weder last_final_payload_root noch genesis_note.bin vorhanden
+    ist, wird [0u8; 32] als Seed-Anchor verwendet. Das macht die
+    Committee-Selection vorhersagbar/deterministisch auf trivialem
+    Seed. Grinding-Angriff auf Committee-Zusammensetzung theoretisch
+    moeglich (in Praxis nur bei frischem Node ohne Genesis).
+
+  Fix:
+    Wenn Fallback [0; 32] erreicht wird: warn! loggen und ggf.
+    Committee-Berechnung abbrechen (return None statt [0; 32]).
+
+  Test:
+    Node ohne genesis_note.bin starten → committee_seed_anchor muss
+    None / Warning liefern statt [0; 32].
+
+----------------------------------------------------------------------
+  P2 — MITTEL (Runde 5: 4 Findings)
+----------------------------------------------------------------------
+
+----------------------------------------------------------------------
+[x] F79 — Stealth-Keys werden unverschluesselt gespeichert
+----------------------------------------------------------------------
+  Modul:      stealth (phantom-signer)
+  Datei:      crates/phantom-signer/src/stealth.rs
+  Zeilen:     Z.292-316 (save_stealth_keys)
+  Confidence: high
+
+  Risiko:
+    save_stealth_keys schreibt scan_secret und spend_secret als
+    Hex-Klartext in eine TOML-Datei (Unix: 0o600). Keine
+    Verschluesselung wie bei SeedStore oder WalletDb. Bei
+    Exfiltration der Datei: vollstaendiger Verlust der
+    Stealth-Privacy + Spending-Faehigkeit.
+
+  Fix:
+    Analog zu save_seed_store_encrypted: Argon2id + XChaCha20-
+    Poly1305 verschluesseln. Passphrase beim Speichern/Laden
+    abfragen.
+
+  Test:
+    Gespeicherte Datei darf keine Hex-Secrets im Klartext enthalten
+    (grep nach 64-char Hex-Strings → 0 Treffer).
+
+----------------------------------------------------------------------
+[x] F80 — PKCS#11 HSM nutzt ECDSA-Mechanism fuer Schnorr-Votes
+----------------------------------------------------------------------
+  Modul:      pkcs11_sign (phantom-signer)
+  Datei:      crates/phantom-signer/src/pkcs11_sign.rs
+  Zeilen:     Z.136 (seat_vote_sign_with_hsm, Mechanism::ECDSA)
+  Confidence: high
+
+  Risiko:
+    seat_vote_sign_with_hsm signiert mit Mechanism::ECDSA, aber
+    Phantom-Coin nutzt Schnorr-Signaturen. ECDSA-Signaturen werden
+    von schnorr_verify abgelehnt → Votes immer ungueltig wenn HSM
+    genutzt wird. Ergaenzt F38 (Domain-Mismatch): selbst mit
+    korrekter Domain wuerde der falsche Mechanism die Signatur
+    invalidieren.
+
+  Fix:
+    Dokumentieren, dass PKCS#11-HSM-Support experimentell ist und
+    nur mit HSMs funktioniert, die Schnorr via Custom-Mechanism
+    unterstuetzen. Oder: Schnorr-Signing software-seitig mit
+    extrahiertem Private Key implementieren.
+
+  Test:
+    HSM-signierte Vote → schnorr_verify → muss pruefen ob
+    tatsaechlich verifiziert (aktuell: Negativtest erwartet Fehler).
+
+----------------------------------------------------------------------
+[x] F81 — walletdb Legacy-Migration ohne Verifikation
+----------------------------------------------------------------------
+  Modul:      walletdb (phantom-signer)
+  Datei:      crates/phantom-signer/src/walletdb.rs
+  Zeilen:     Z.238-285 (open_locked, Legacy-Migration)
+  Confidence: low
+
+  Risiko:
+    Bei erster Oeffnung mit Passwort (kein META_KEY): alle vorhandenen
+    Eintraege werden als unverschluesselte WalletAddrMeta geparst und
+    mit neuem Key re-encrypted. Wenn die DB von einem Angreifer mit
+    manipulierten Entries gefuellt wurde, werden diese ohne Validierung
+    migriert (lokaler Angriff auf eigene DB).
+
+  Fix:
+    Sanity-Check auf Legacy-Eintraege: addr nicht leer, version == 1,
+    keine uebergrossen Values.
+
+  Test:
+    DB mit malformed Legacy-Entry → Migration muss fehlschlagen.
+
+----------------------------------------------------------------------
+[x] F82 — Config-Datei wird dreimal geparst (TOCTOU)
+----------------------------------------------------------------------
+  Modul:      phantom-node
+  Datei:      crates/phantom-node/src/main.rs
+  Zeilen:     ~Z.1800-1822 (run_status_serve, Config-Loading)
+  Confidence: low
+
+  Risiko:
+    Die Config-Datei wird fuer rotation, da_gating und http_rate
+    jeweils separat gelesen und geparst. Bei Aenderung zwischen den
+    Reads → inkonsistente Konfiguration (TOCTOU). Kein direkter
+    Security-Impact, aber Code-Smell und potentielle Quelle fuer
+    schwer debugbare Inkonsistenzen.
+
+  Fix:
+    Config einmal lesen und alle Felder daraus extrahieren:
+      let raw = std::fs::read_to_string(&config_path)?;
+      let full: FullConfig = toml::from_str(&raw)?;
+
+  Test:
+    Kein spezifischer Test noetig (Refactoring).
+
+----------------------------------------------------------------------
+  P1 — HOCH (Runde 5b: 2 Findings)
+----------------------------------------------------------------------
+
+----------------------------------------------------------------------
+[x] F83 — pc-state: restore_snapshot loescht bestehenden State nicht
+----------------------------------------------------------------------
+  Modul:      pc-state
+  Datei:      crates/pc-state/src/lib.rs
+  Zeilen:     Z.2067-2109 (restore_snapshot)
+  Confidence: high
+
+  Risiko:
+    restore_snapshot fuegt Snapshot-Daten zum bestehenden Backend
+    hinzu, ohne vorher zu loeschen. Auf einem nicht-leeren Backend
+    ist das Ergebnis die UNION aus Alt-State + Snapshot. Der Root-
+    Check am Ende (Z.2102-2106) faengt den Mismatch ab → Restore
+    schlaegt immer fehl auf non-empty Backends. Kommentar Z.2068
+    bestaetigt: "For production, this would be more sophisticated".
+
+  Fix:
+    Vor dem Restore alle Keys loeschen (iter() → del()), oder fuer
+    RocksDB DB::destroy + Re-Open verwenden.
+
+  Test:
+    restore_snapshot auf non-empty Backend → muss nach Fix
+    erfolgreich restoren.
+
+----------------------------------------------------------------------
+[x] F84 — pc-consensus/committee_hash: Keine Tests fuer Committee-Selection
+----------------------------------------------------------------------
+  Modul:      pc-consensus
+  Datei:      crates/pc-consensus/src/committee_hash.rs
+  Zeilen:     Z.1-107 (gesamte Datei)
+  Confidence: high
+
+  Risiko:
+    select_committee_hash ist konsens-kritisch (determiniert wer
+    attestieren darf), hat aber null Tests. Jede Regression in der
+    Sortierung, Scoring-Logik oder Anti-Collocation-Pruefung bleibt
+    unbemerkt → potentieller Consensus-Split.
+
+  Fix:
+    Unit-Tests hinzufuegen: Determinismus (gleicher Seed → gleiches
+    Committee), Anti-Collocation (1 Seat/operator_id),
+    MIN_ATTESTOR_STAKE-Filter, BLS-PoP-Reject.
+
+  Test:
+    Mindestens 4 Tests: Determinismus, Stake-Filter, Operator-Dedup,
+    leere Candidates.
+
+----------------------------------------------------------------------
+  P2 — MITTEL (Runde 5b: 3 Findings)
+----------------------------------------------------------------------
+
+----------------------------------------------------------------------
+[x] F85 — pc-consensus/attestor_claims: ClaimTracker ohne Groessenlimit
+----------------------------------------------------------------------
+  Modul:      pc-consensus
+  Datei:      crates/pc-consensus/src/attestor_claims.rs
+  Zeilen:     Z.240-242 (ClaimTracker)
+  Confidence: med
+
+  Risiko:
+    ClaimTracker.claimed ist ein unbegrenzter HashSet. Wenn
+    cleanup_expired nicht regelmaessig aufgerufen wird, waechst der
+    Speicher unbegrenzt. Die Cleanup-Methoden existieren (Z.289-298),
+    aber es gibt keinen Enforcement.
+
+  Fix:
+    MAX_CLAIMS Constant + Reject wenn Limit erreicht, oder
+    automatisches Cleanup im try_mark_claimed-Pfad.
+
+  Test:
+    100k Claims ohne Cleanup → assert Size-Begrenzung.
+
+----------------------------------------------------------------------
+[x] F86 — pc-state: prune_old_utxos ignoriert UTXOs ohne minted_at
+----------------------------------------------------------------------
+  Modul:      pc-state
+  Datei:      crates/pc-state/src/lib.rs
+  Zeilen:     Z.2000-2018 (prune_old_utxos)
+  Confidence: high
+
+  Risiko:
+    prune_old_utxos prueft nur UTXOs, bei denen get_minted_at
+    Some(minted) liefert. UTXOs, die via apply_mint (ohne Index)
+    erstellt wurden, haben kein minted_at → werden nie gepruned.
+    Langfristig: unbegrenztes UTXO-Set-Wachstum durch Legacy-
+    Eintraege.
+
+  Fix:
+    UTXOs ohne minted_at als "alt genug" behandeln (z.B.
+    minted_at = 0 default) oder apply_mint deprecaten zugunsten
+    von apply_mint_with_index.
+
+  Test:
+    UTXO ohne minted_at + prune → muss entfernt werden.
+
+----------------------------------------------------------------------
+[x] F87 — pc-state: Validator-Register iter O(n) bei Duplicate-Check
+----------------------------------------------------------------------
+  Modul:      pc-state
+  Datei:      crates/pc-state/src/lib.rs
+  Zeilen:     Z.1448-1454 (can_apply_micro_tx, Validator-Register)
+  Confidence: med
+
+  Risiko:
+    Bei Validator-Registrierung wird iter_validator_records()
+    aufgerufen um zu pruefen, ob schon ein anderer Validator
+    denselben stake_lock hat. Das ist O(n) fuer n registrierte
+    Validatoren. Bei vielen Registrierungen pro Payload → O(n^2).
+
+  Fix:
+    Sekundaerindex stake_lock → validator_id im Backend fuehren
+    (HashMap oder RocksDB-Prefix).
+
+  Test:
+    Benchmark mit 1000 Validatoren + Register-TX → Laufzeit messen.
+
+================================================================================
+  RUNDE 6 — GUI-WALLET, TUI-WALLET  (2026-02-11)
+  Neue Findings: 12 (P0: 0, P1: 6, P2: 6)
+================================================================================
+
+----------------------------------------------------------------------
+[x] F88 — GUI: Fragiles args-Vec-Mutation-Pattern in Closures
+----------------------------------------------------------------------
+  Modul:      phantom-gui-wallet
+  Datei:      crates/phantom-gui-wallet/src/main.rs
+  Zeilen:     Z.5024-5052, Z.5141-5169, Z.5867-5892
+  Prio:       P1
+  Confidence: high
+
+  Risiko:
+    In run_validator_stake, run_validator_register und send wird
+    ein args-Vec ueber &mut in verschachtelten with_temp_secret_file-
+    Closures modifiziert (.push()). Das Pattern ist fragil: ein
+    zukuenftiger Refactor, der args in den Struct-State zieht,
+    wuerde sofort kumulatives Argument-Leak erzeugen. Zudem zeigt
+    der Pfad im Vec nach Closure-Ende auf eine geloeschte Datei.
+
+  Fix:
+    Args in der Closure lokal klonen statt den aeusseren Vec zu
+    mutieren, oder args als Slice uebergeben und erst in der
+    Closure den Rest anfuegen.
+
+  Test:
+    Unit-Test: zweimal run_validator_stake aufrufen → args-Laenge
+    darf keine kumulierten Eintraege enthalten.
+
+----------------------------------------------------------------------
+[x] F89 — GUI+TUI: Passphrase als Klartext-String (kein Zeroize)
+----------------------------------------------------------------------
+  Modul:      phantom-gui-wallet, phantom-tui-wallet
+  Datei:      crates/phantom-gui-wallet/src/main.rs  Z.5302-5304
+              crates/phantom-tui-wallet/src/main.rs   Z.241
+  Prio:       P1
+  Confidence: high
+
+  Risiko:
+    wallet_passphrase wird als String im Struct gehalten — fuer die
+    gesamte Lebensdauer der App. Rust-Strings werden vom Allocator
+    nicht zeroed. Bei Crash, Core-Dump oder Swap-to-Disk kann die
+    Passphrase im Klartext ausgelesen werden. Gleich gilt fuer
+    validator_setup.passphrase und AppState.passphrase (TUI).
+
+  Fix:
+    zeroize::Zeroizing<String> oder secrecy::SecretString verwenden,
+    damit bei Drop automatisch ueberschrieben wird.
+
+  Test:
+    Typ-Ebene: Compile-Time sicherstellen, dass alle Passphrase-
+    Felder Zeroizing<String> sind. Drop-Verhalten validieren.
+
+----------------------------------------------------------------------
+[x] F90 — GUI: 4x duplizierte Statusbar-Farblogik
+----------------------------------------------------------------------
+  Modul:      phantom-gui-wallet
+  Datei:      crates/phantom-gui-wallet/src/main.rs
+  Zeilen:     Z.6020-6149
+  Prio:       P2
+  Confidence: high
+
+  Risiko:
+    Der identische Block (keyword-basierte Farbbestimmung aus Status-
+    String) wird 4x kopiert (Node, Wallet, Mining, Validator).
+    Fehlerhafte Erweiterung in einem Branch aber nicht den anderen
+    ist fast unvermeidbar.
+
+  Fix:
+    Hilfsfunktion fn status_color(s: &str) -> Color32 extrahieren,
+    in allen 4 Branches aufrufen.
+
+  Test:
+    Unit-Test fuer status_color mit allen Keyword-Varianten.
+
+----------------------------------------------------------------------
+[x] F91 — GUI: HTTP-Client wird pro Request neu gebaut
+----------------------------------------------------------------------
+  Modul:      phantom-gui-wallet
+  Datei:      crates/phantom-gui-wallet/src/main.rs
+  Zeilen:     Z.5339-5466 (open_wallet, refresh_history_for_selected)
+  Prio:       P2
+  Confidence: high
+
+  Risiko:
+    Jeder History-Abruf baut einen neuen reqwest::blocking::Client
+    inkl. TLS-Handshake. Bei TLS-CA-Pinning wird die CA-Datei jedes
+    Mal von Disk gelesen und geparst. Das ist unnoetig teuer auf
+    dem UI-Thread und blockiert die GUI.
+
+  Fix:
+    Client einmal in GuiState::new() bauen (ggf. Option<Client>
+    mit Lazy-Init); bei TLS-Config-Aenderung invalidieren.
+
+  Test:
+    Benchmark: 100x fetch_history mit gecachtem vs. neuem Client.
+
+----------------------------------------------------------------------
+[x] F92 — GUI: Blocking HTTP auf UI-Thread → GUI-Freeze
+----------------------------------------------------------------------
+  Modul:      phantom-gui-wallet
+  Datei:      crates/phantom-gui-wallet/src/main.rs
+  Zeilen:     Z.5920-5946, Z.6001
+  Prio:       P1
+  Confidence: high
+
+  Risiko:
+    In eframe::App::update() werden synchrone Operationen wie
+    refresh_history_for_selected() (HTTP-Request, bis 10s Timeout)
+    und load_validator_stake_info() aufgerufen. Diese blockieren
+    den UI-Thread → GUI friert fuer Sekunden ein. Besonders bei
+    Tab-Wechsel zum Wallet-Tab.
+
+  Fix:
+    History/Metrics/Stake-Requests in einen Background-Thread
+    auslagern (std::thread::spawn + Channel oder
+    Arc<Mutex<Option<Result>>>) und im update() nur das Ergebnis
+    abholen.
+
+  Test:
+    Manuell: Node absichtlich offline → GUI darf nicht einfrieren.
+
+----------------------------------------------------------------------
+[x] F93 — GUI: Mnemonic/Seed als String ohne Zeroize
+----------------------------------------------------------------------
+  Modul:      phantom-gui-wallet
+  Datei:      crates/phantom-gui-wallet/src/main.rs
+  Zeilen:     Z.5206-5290
+  Prio:       P1
+  Confidence: high
+
+  Risiko:
+    mnemonic_str = words.join(" ") — die Seed-Phrase wird als
+    normaler String gehalten und ueber stdin an phantom-signer
+    gepipet. Nach Funktionsende wird der String gedropped aber
+    nicht gezielt zeroed. CreateWalletStep::ShowSeed { words }
+    haelt die Woerter als Vec<String> im GUI-State — sichtbar
+    im Speicher solange die Enum-Variante aktiv ist.
+
+  Fix:
+    zeroize::Zeroizing<String> fuer mnemonic_str; nach Uebergang
+    von ShowSeed → VerifySeed → Creating die words zeroen.
+
+  Test:
+    Typsicherheit: Zeroizing<String> an allen Seed-Stellen
+    erzwingen (Compile-Time).
+
+----------------------------------------------------------------------
+[x] F94 — TUI: Hardcodierter Keystore-Pfad ../seeds/default.toml
+----------------------------------------------------------------------
+  Modul:      phantom-tui-wallet
+  Datei:      crates/phantom-tui-wallet/src/main.rs
+  Zeilen:     Z.620-622
+  Prio:       P1
+  Confidence: high
+
+  Risiko:
+    Der Pfad wallet_db_path/../seeds/default.toml ist ein fester
+    relativer Pfad. Wenn wallet_db_path z.B.
+    /home/user/.phantom/wallets/default ist, zeigt das auf
+    /home/user/.phantom/wallets/seeds/default.toml — was
+    wahrscheinlich nicht existiert. Das korrekte Layout waere
+    ~/.phantom/seeds/default.toml. Jeder Send-Versuch schlaegt
+    fehl. Die GUI nutzt seed_store_path_for_wallet_db() — robuster.
+
+  Fix:
+    seed_store_path_for_wallet_db aus dem GUI-Crate in ein Shared-
+    Module extrahieren (oder phantom-signer crate) und im TUI
+    nutzen. Oder --seed-store statt --keystore verwenden.
+
+  Test:
+    Send-Versuch im TUI mit Default-Wallet-DB-Pfad → Keystore
+    muss gefunden werden.
+
+----------------------------------------------------------------------
+[x] F95 — TUI: Adress-Index Overflow bei u32::MAX
+----------------------------------------------------------------------
+  Modul:      phantom-tui-wallet
+  Datei:      crates/phantom-tui-wallet/src/main.rs
+  Zeilen:     Z.503-504
+  Prio:       P2
+  Confidence: med
+
+  Risiko:
+    max_index = addrs.iter().map(|a| a.index).max().unwrap_or(0);
+    new_index = max_index + 1;
+    Bei u32::MAX als Index → Overflow auf new_index. Unrealistisch,
+    aber nicht defensiv kodiert.
+
+  Fix:
+    max_index.checked_add(1)
+      .ok_or_else(|| anyhow!("address index overflow"))?
+
+  Test:
+    Unit-Test: Index bei u32::MAX → muss Fehler zurueckgeben.
+
+----------------------------------------------------------------------
+[x] F96 — TUI: Integer-Overflow bei amount + fee
+----------------------------------------------------------------------
+  Modul:      phantom-tui-wallet
+  Datei:      crates/phantom-tui-wallet/src/main.rs
+  Zeilen:     Z.586
+  Prio:       P1
+  Confidence: high
+
+  Risiko:
+    if hist.balance < amount + fee — amount + fee kann bei
+    u64::MAX-nahen Werten wrappen (Debug = Panic, Release = Wrap).
+    Wenn amount = u64::MAX und fee = 1, wrappt das zu 0 →
+    Balance-Check bestanden → TX wird gesendet.
+    Die GUI nutzt korrekt amount.saturating_add(fee).
+
+  Fix:
+    amount.checked_add(fee)
+      .ok_or_else(|| anyhow!("amount + fee overflow"))?
+    Dann mit hist.balance vergleichen.
+
+  Test:
+    execute_send mit amount=u64::MAX, fee=1 → muss Fehler liefern.
+
+----------------------------------------------------------------------
+[x] F97 — TUI: Stille Fee-Parse-Fehler (unwrap_or(0))
+----------------------------------------------------------------------
+  Modul:      phantom-tui-wallet
+  Datei:      crates/phantom-tui-wallet/src/main.rs
+  Zeilen:     Z.575
+  Prio:       P2
+  Confidence: high
+
+  Risiko:
+    let fee: u64 = app.send_fee.parse().unwrap_or(0);
+    Jeder ungueltige Fee-String ("abc", "-5", "1.5") wird
+    stillschweigend als 0 behandelt. Der Nutzer denkt, er hat
+    eine Fee gesetzt, aber sie wird ignoriert.
+
+  Fix:
+    Parse-Fehler als Fehler an den Nutzer propagieren:
+    let fee: u64 = app.send_fee.parse()
+      .map_err(|_| anyhow!("{}", texts.invalid_fee))?;
+
+  Test:
+    send_fee = "abc" → muss Fehlermeldung zeigen.
+
+----------------------------------------------------------------------
+[x] F98 — GUI+TUI: ~6 duplizierte Utility-Funktionen ohne Shared-Crate
+----------------------------------------------------------------------
+  Modul:      phantom-gui-wallet, phantom-tui-wallet
+  Datei:      crates/phantom-gui-wallet/src/main.rs  Z.577-616, Z.327-352
+              crates/phantom-tui-wallet/src/main.rs   Z.36-78, Z.284-309
+  Prio:       P2
+  Confidence: high
+
+  Risiko:
+    Mindestens 6 Funktionen sind nahezu identisch in beiden Crates
+    kopiert: with_temp_secret_file, lock_from_pc_address,
+    is_executable_file, find_in_path, find_signer_binary,
+    parse_http_url, ensure_bearer_transport_safe,
+    read_response_text_limited, fetch_history.
+    Bug-Fixes in einem Crate werden im anderen vergessen
+    (Beispiel: GUI hat saturating_add bei F96, TUI nicht).
+
+  Fix:
+    Shared Utility-Crate (phantom-wallet-common o.ae.) mit diesen
+    Funktionen erstellen; beide Wallets als Abhaengigkeit.
+
+  Test:
+    Nach Extraktion alle bestehenden Tests beider Wallets gruen.
+
+----------------------------------------------------------------------
+[x] F99 — GUI: Seed-Woerter pro Frame geklont, nicht zeroed
+----------------------------------------------------------------------
+  Modul:      phantom-gui-wallet
+  Datei:      crates/phantom-gui-wallet/src/main.rs
+  Zeilen:     Z.6649-6731
+  Prio:       P2
+  Confidence: med
+
+  Risiko:
+    Im VerifySeed-Step werden words (die 24 Seed-Woerter) in jeder
+    Frame-Iteration geklont und wieder in next_step geschrieben
+    (Z.6713-6729). Die alten Klone werden zwar gedropped, aber der
+    Allocator zeroed den Speicher nicht. Ueber viele Frames sammeln
+    sich viele Seed-Kopien im Heap.
+
+  Fix:
+    Seed-Woerter nur einmal halten (z.B.
+    Arc<Vec<Zeroizing<String>>>) statt Clone bei jedem Frame.
+    Nach EnterPassphrase-Schritt die words zeroen.
+
+  Test:
+    Code-Review + Zeroizing als Compile-Time-Guardrail.
+
+--------------------------------------------------------------------------------
+  RUNDE 7 — status_http, quic_listen_with_metrics, mine_mint, TUI-Signer,
+             phantom-node Binaries
+--------------------------------------------------------------------------------
+
+[x] F100 — status_http: constant_time_eq leakt Token-Laenge via Early-Return
+  Modul:  phantom-node (bin/status_http)
+  Datei:  crates/phantom-node/src/bin/status_http.rs
+  Zeilen: 122-131
+  Prio:   P2
+  Confidence: high
+
+  Risiko:
+    constant_time_eq() prueft zuerst a.len() != b.len() und gibt sofort false
+    zurueck. Damit kann ein Angreifer per Timing-Seitenkanal die exakte Laenge
+    des Bearer-Tokens ermitteln. Kein direkter Exploit, erleichtert aber
+    Brute-Force auf Token mit bekannter Laenge.
+
+  Fix:
+    Verwende subtle::ConstantTimeEq oder fuehre den XOR-Vergleich immer ueber
+    max(a.len(), b.len()) Bytes durch, mit Padding und abschliessendem
+    Laengen-Check.
+
+  Test:
+    Timing-Test: Tokens gleicher Laenge vs. unterschiedlicher Laenge.
+    Die Varianz darf nicht signifikant korrelieren.
+
+[x] F101 — status_http: Full UTXO-Iteration unter Mutex blockiert alle Requests
+  Modul:  phantom-node (bin/status_http)
+  Datei:  crates/phantom-node/src/bin/status_http.rs
+  Zeilen: 380-390 (/consensus/validators), 501-511 (/consensus/committee)
+  Prio:   P1
+  Confidence: high
+
+  Risiko:
+    /consensus/validators und /consensus/committee iterieren mit
+    st.backend().iter_full() ueber alle UTXOs waehrend sie die
+    globale Mutex halten. Bei grossen UTXO-Sets (>100k) blockiert
+    das fuer Sekunden alle anderen Requests (/wallet/history,
+    /tx/broadcast). DoS-Vektor fuer Wallet-User.
+
+  Fix:
+    a) Stake-Aggregation in Background-Task vorberechnen (sekuendlich),
+       Ergebnis in Arc<RwLock<HashMap>> cachen.
+    b) Alternativ: Read-Only Snapshot ohne globale Mutex nutzen.
+
+  Test:
+    Load-Test: 1M UTXOs + parallele /wallet/history und
+    /consensus/validators Aufrufe. Latenz messen, darf nicht
+    linear mit UTXO-Menge steigen.
+
+[x] F102 — status_http: Sync File-I/O in async Context (atomic_write, journal_append)
+  Modul:  phantom-node (bin/status_http)
+  Datei:  crates/phantom-node/src/bin/status_http.rs
+  Zeilen: 654-760 (/tx/broadcast), 762-847 (/evidence/broadcast)
+  Prio:   P1
+  Confidence: high
+
+  Risiko:
+    /tx/broadcast und /evidence/broadcast rufen atomic_write() und
+    journal_append() auf — beides sync File-I/O mit fsync().
+    Diese laufen in der async handle()-Funktion auf Tokio Worker-Threads.
+    Bei langsamer Disk oder vielen gleichzeitigen Broadcasts blockiert
+    das den gesamten Tokio-Runtime-Thread → Starvation.
+
+  Fix:
+    File-I/O in tokio::task::spawn_blocking() auslagern, oder
+    tokio::fs verwenden.
+
+  Test:
+    /tx/broadcast Flood (100 valide TXs/s) auf langsamer Disk →
+    pruefen ob parallele GET-Requests weiterhin <50ms antworten.
+
+[x] F103 — status_http: /evidence/broadcast ohne State-Validierung
+  Modul:  phantom-node (bin/status_http)
+  Datei:  crates/phantom-node/src/bin/status_http.rs
+  Zeilen: 762-847
+  Prio:   P1
+  Confidence: high
+
+  Risiko:
+    /tx/broadcast (Z. 722) validiert Transaktionen gegen den State via
+    st.can_apply_micro_tx() inkl. Signaturpruefung mit network_id.
+    /evidence/broadcast prueft nur validate_evidence_sanity() (Z. 809) —
+    keine State-Validierung, keine Signaturpruefung gegen network_id.
+    Angreifer kann fabricierte Evidence in den Mempool persistieren.
+
+  Fix:
+    State-Level-Validierung fuer Evidence hinzufuegen:
+    a) Validator-Existenz pruefen
+    b) Evidence-Signaturen gegen network_id verifizieren
+    c) Duplikat-Check im State
+
+  Test:
+    Evidence mit ungueltigem Validator bzw. falscher Signatur
+    submitten → muss rejected werden.
+
+[x] F104 — status_http: Duplizierte Stake-Aggregationslogik
+  Modul:  phantom-node (bin/status_http)
+  Datei:  crates/phantom-node/src/bin/status_http.rs
+  Zeilen: 380-390 vs. 501-511
+  Prio:   P2
+  Confidence: high
+
+  Risiko:
+    Die Stake-per-Lock-Aggregation ist zwischen /consensus/validators
+    (HashMap<[u8;32], (u64, u64)>) und /consensus/committee
+    (HashMap<[u8;32], u64>) dupliziert mit leicht unterschiedlichen
+    Typen. Divergenz-Risiko bei zukuenftigen Aenderungen.
+
+  Fix:
+    Gemeinsame Funktion extrahieren:
+    fn aggregate_stake_by_lock(backend) -> HashMap<[u8;32], (u64, u64)>
+
+  Test:
+    Unit-Test fuer die extrahierte Funktion.
+
+[x] F105 — TUI-Signer: Entschluesselte Secret-Key-Bytes nicht gezeroed
+  Modul:  phantom-tui (signer)
+  Datei:  crates/phantom-tui/src/signer.rs
+  Zeilen: 822 (run_sign), 945 (run_psbt_sign), 1106 (run_seat_vote_sign)
+  Prio:   P1
+  Confidence: high
+
+  Risiko:
+    secret: Vec<u8> und sec32: [u8; 32] enthalten nach Entschluesselung
+    den Raw Secret Key, werden aber nie gezeroed. Das zeroize-Crate ist
+    importiert (Z. 24) und wird fuer Passphrase-Derivation genutzt
+    (Z. 1628), aber NICHT fuer das eigentliche Schlüsselmaterial.
+    Bei Memory-Dump oder Swap landet der Key im Klartext auf Disk.
+
+  Fix:
+    Nach jeder Nutzung: secret.zeroize() und sec32.zeroize().
+    Besser: Typen auf Zeroizing<Vec<u8>> bzw. Zeroizing<[u8;32]>
+    aendern fuer automatisches Zeroize on Drop.
+
+  Test:
+    Compile-Time: Typ-Aenderung auf Zeroizing erzwingt korrektes
+    Handling. Code-Review auf alle Stellen mit decrypt_keystore_secret().
+
+[x] F106 — TUI-Signer: secret_hex Import-Feld wird im Klartext angezeigt
+  Modul:  phantom-tui (signer)
+  Datei:  crates/phantom-tui/src/signer.rs
+  Zeilen: 186
+  Prio:   P1
+  Confidence: high
+
+  Risiko:
+    Der Import-Command hat das Feld "secret_hex (32B)" mit secret: false.
+    Der rohe Secret Key in Hex wird auf dem TUI-Bildschirm angezeigt.
+    Jeder mit Blick auf den Monitor kann den Private Key lesen.
+
+  Fix:
+    Zeile 186 aendern: secret: false → secret: true
+
+  Test:
+    Visueller Test: Import-Command oeffnen → Feld muss maskiert sein.
+
+[x] F107 — TUI-Signer: Form-Values inkl. Passphrases ohne Zeroize geklont
+  Modul:  phantom-tui (signer)
+  Datei:  crates/phantom-tui/src/signer.rs
+  Zeilen: 642
+  Prio:   P2
+  Confidence: med
+
+  Risiko:
+    let form = state.forms[state.selected].clone() klont alle
+    InputField-Values inklusive Passphrase-Felder. Die geklonten
+    Strings werden bei Drop nicht gezeroed. Mehrere Kopien
+    akkumulieren im Heap.
+
+  Fix:
+    Zeroizing<String> fuer InputField.value wenn secret == true,
+    oder Clone vermeiden (Referenz nutzen).
+
+  Test:
+    Code-Review + Typ-Enforcement mit Zeroizing.
+
+[x] F108 — TUI-Signer: env::set_var unsound in Multi-Thread-Context
+  Modul:  phantom-tui (signer)
+  Datei:  crates/phantom-tui/src/signer.rs
+  Zeilen: 1165-1166
+  Prio:   P2
+  Confidence: med
+
+  Risiko:
+    env::set_var("PHANTOM_BITBOX_TRANSPORT", ...) ist in Rust 2024
+    unsound in Multithreaded-Programmen (rust-lang/rust#90308).
+    Aktuell Single-Threaded TUI, aber latentes Soundness-Problem
+    falls Code jemals in Multithread-Kontext genutzt wird.
+
+  Fix:
+    Config in einem Struct-Feld speichern statt Environment-Variablen.
+    Z.B. SignerState um bitbox_transport: String und bridge_url: String
+    erweitern.
+
+  Test:
+    Clippy-Lint env_set_var (nightly) oder manuelles Code-Review.
+
+[x] F109 — TUI-Signer: HWI signmessage leakt Message-Inhalt in Prozess-argv
+  Modul:  phantom-tui (signer)
+  Datei:  crates/phantom-tui/src/signer.rs
+  Zeilen: 1221
+  Prio:   P2
+  Confidence: high
+
+  Risiko:
+    cmd.args(["--message", &m]) uebergibt den Nachrichteninhalt als
+    Command-Line-Argument an hwi. Dieser ist in der Prozessliste
+    (ps aux) sichtbar. Bei sensitiven Nachrichten ein Leak.
+
+  Fix:
+    Nachricht ueber stdin pipen oder temporaere Datei verwenden
+    (analog with_temp_secret_file).
+
+  Test:
+    ps aux | grep hwi waehrend Signierung → Message darf nicht
+    in der Prozessliste erscheinen.
+
+--------------------------------------------------------------------------------
+  RUNDE 8 — phantom-tui (main.rs, node.rs, wallet.rs, miner.rs)
+--------------------------------------------------------------------------------
+
+[x] F110 — node.rs: auth_token-Feld ohne Maskierung (secret: false)
+
+  Modul:  phantom-tui (node)
+  Datei:  crates/phantom-tui/src/node.rs
+  Zeilen: 188-193
+  Prio:   P1
+  Confidence: high
+
+  Risiko:
+    Das InputField fuer "auth_token (optional)" hat secret: false.
+    Der Bearer-Token wird im Klartext auf dem TUI-Bildschirm angezeigt.
+    Shoulder-Surfing oder Screenshots leaken das Token.
+
+  Fix:
+    secret: true setzen (Zeile 192). Die draw()-Funktion maskiert
+    secret-Felder bereits mit "*".repeat(v.chars().count()).
+
+  Test:
+    TUI starten, auth_token eingeben → muss als "****" angezeigt werden,
+    nicht als Klartext.
+
+[x] F111 — wallet.rs: Passphrase als plain String ohne Zeroize
+
+  Modul:  phantom-tui (wallet)
+  Datei:  crates/phantom-tui/src/wallet.rs
+  Zeilen: 189, 217, 609
+  Prio:   P1
+  Confidence: high
+
+  Risiko:
+    AppState.passphrase ist ein plain String, der die gesamte Wallet-Session
+    im Heap lebt und nie gezeroed wird. Nach Login wird login_input geklont
+    (nicht moved+zeroed) → mehrere Kopien der Passphrase im Speicher.
+    Core-Dumps oder Heap-Inspection leaken die Passphrase.
+    Gleiche Klasse wie F89 (phantom-signer), aber hier in phantom-tui.
+
+  Fix:
+    1. Typ Zeroizing<String> statt String fuer passphrase und login_input.
+    2. Nach erfolgreichem Login: login_input.zeroize() aufrufen.
+    3. Bei AppState-Drop wird Zeroizing automatisch gezeroed.
+
+  Test:
+    Unit-Test: AppState droppen, dann Heap-Region pruefen (miri oder
+    manuell mit gdb) → Passphrase-Bytes muessen ueberschrieben sein.
+
+[x] F112 — miner.rs: Tokio-Runtime pro Hash-Iteration (Hashrate-Killer)
+
+  Modul:  phantom-tui (miner)
+  Datei:  crates/phantom-tui/src/miner.rs
+  Zeilen: 641-648
+  Prio:   P1
+  Confidence: high
+
+  Risiko:
+    Jeder Mining-Thread erstellt bei JEDEM Hash eine neue
+    tokio::runtime::Builder::new_current_thread() Runtime, nur um
+    current_seed.read().await auszufuehren. Das ist extrem teuer und
+    reduziert die effektive Hashrate um Groessenordnungen.
+    Gleicher Bug wie F50 (phantom-miner-gui).
+
+  Fix:
+    current_seed von tokio::sync::RwLock<[u8;32]> auf
+    std::sync::RwLock<[u8;32]> oder Arc<AtomicU64>-Paar umstellen.
+    Dann entfaellt die Tokio-Runtime im Mining-Thread komplett:
+      let seed = *state.current_seed.read().unwrap();
+
+  Test:
+    Benchmark vorher/nachher: Hashrate muss um Faktor 10-100x steigen.
+    cargo bench oder einfacher Laufzeitvergleich mit gleicher Difficulty.
+
+[x] F113 — wallet.rs: Blocking HTTP auf UI-Thread friert TUI ein
+
+  Modul:  phantom-tui (wallet)
+  Datei:  crates/phantom-tui/src/wallet.rs
+  Zeilen: 612-625, 299, 711-726
+  Prio:   P1
+  Confidence: high
+
+  Risiko:
+    fetch_history() und generate_new_address() sind synchrone blocking
+    HTTP-Calls, die direkt aus handle_key() (UI-Thread) aufgerufen werden.
+    Bei Netzwerk-Timeout (bis 10s) friert die gesamte TUI ein.
+    Node.rs loest das gleiche Problem korrekt via Background-Thread + mpsc.
+
+  Fix:
+    fetch_history und generate_new_address in Background-Thread auslagern,
+    Ergebnis ueber mpsc::channel zurueck an WalletState liefern.
+    Pattern: analog node.rs run_status() (Zeile 583-597).
+
+  Test:
+    Node offline setzen → TUI darf nicht einfrieren.
+    Key-Events muessen weiterhin verarbeitet werden.
+
+[x] F114 — wallet.rs: Fee unwrap_or(0) — stille Null-Fee
+
+  Modul:  phantom-tui (wallet)
+  Datei:  crates/phantom-tui/src/wallet.rs
+  Zeilen: 742-746
+  Prio:   P2
+  Confidence: high
+
+  Risiko:
+    send_fee.parse().unwrap_or(0) defaults still auf 0 bei Parse-Fehler.
+    Benutzer bemerkt nicht, dass seine Fee-Eingabe ignoriert wurde.
+    Gleiche Klasse wie F97 (phantom-tui-wallet).
+
+  Fix:
+    Bei Parse-Fehler Err zurueckgeben statt silent fallback:
+      let fee: u64 = app.send_fee.trim().parse()
+          .map_err(|_| anyhow!("{}", texts.invalid_amount))?;
+
+  Test:
+    Ungueltige Fee "abc" eingeben → muss Fehlermeldung zeigen,
+    nicht still 0 verwenden.
+
+[x] F115 — wallet.rs: Hardcodierter Keystore-Pfad relativ zu wallet_db_path
+
+  Modul:  phantom-tui (wallet)
+  Datei:  crates/phantom-tui/src/wallet.rs
+  Zeilen: 776
+  Prio:   P2
+  Confidence: high
+
+  Risiko:
+    format!("{}/../seeds/default.toml", app.wallet_db_path.display())
+    ist ein hardcodierter relativer Pfad. Wenn wallet_db_path nicht dem
+    erwarteten Layout entspricht, wird ein falscher/nicht-existenter
+    Keystore referenziert. Gleiche Klasse wie F94 (phantom-tui-wallet).
+
+  Fix:
+    Keystore-Pfad konfigurierbar machen (CLI-Arg oder Config-Feld)
+    oder ueber WalletDb-Metadaten ableiten.
+
+  Test:
+    wallet_db_path auf nicht-Standard-Pfad setzen →
+    Keystore muss trotzdem korrekt aufgeloest werden.
+
+[x] F116 — miner.rs: Vec::remove(0) O(n) statt VecDeque fuer Logs
+
+  Modul:  phantom-tui (miner)
+  Datei:  crates/phantom-tui/src/miner.rs
+  Zeilen: 452-454, 541-543, 547-549, 563-565
+  Prio:   P2
+  Confidence: high
+
+  Risiko:
+    self.logs.remove(0) ist O(n) (verschiebt alle Elemente). Bei
+    MAX_LOGS=100 und hoher Hashrate (viele Solutions) wird das
+    quadratisch teuer. node.rs nutzt korrekt VecDeque.
+
+  Fix:
+    logs: Vec<String> → logs: VecDeque<String>.
+    remove(0) → pop_front(). push() → push_back().
+
+  Test:
+    Benchmark: 10.000 Log-Eintraege einfuegen → kein Laufzeitanstieg
+    gegenueber den ersten 100.
+
+[x] F117 — node.rs + wallet.rs + miner.rs: ~15 duplizierte Utility-Funktionen
+
+  Modul:  phantom-tui (node, wallet, miner)
+  Datei:  crates/phantom-tui/src/{node,wallet,miner}.rs
+  Zeilen: diverse
+  Prio:   P2
+  Confidence: high
+
+  Risiko:
+    Mindestens 15 Funktionen sind ueber 3 Dateien dupliziert:
+    is_local_host, is_loopback_host, is_local_url, parse_http_url,
+    ensure_bearer_transport_safe, read_response_text_limited,
+    build_http_client, with_temp_secret_file.
+    Bei einem Fix in einer Kopie werden die anderen vergessen →
+    inkonsistentes Sicherheitsverhalten. Erweitert F98 (GUI+TUI).
+
+  Fix:
+    Gemeinsames Modul phantom-tui/src/http_util.rs (oder crate-level)
+    mit allen HTTP/TLS/Auth-Utilities. Alle 3 Dateien importieren
+    daraus statt Copy-Paste.
+
+  Test:
+    grep -rn "fn is_local_host\|fn parse_http_url\|fn ensure_bearer"
+      crates/phantom-tui/src/ → max 1 Definition pro Funktion.
+
+--------------------------------------------------------------------------------
+  RUNDE 9 — pc-da (da_gating), phantom-config
+--------------------------------------------------------------------------------
+
+[x] F118 — da_gating/mod.rs: Available(vec![]) Asymmetrie Fast-Path vs. Pending-Path
+
+  Modul:  pc-da (da_gating)
+  Datei:  crates/pc-da/src/da_gating/mod.rs
+  Zeilen: 100-107 vs. 189
+  Prio:   P2
+  Confidence: medium
+
+  Risiko:
+    ensure_data_available hat zwei Code-Pfade:
+    - Fast-Path (Zeile 100-107): Payload ist im Storage → gibt
+      DaResult::Available(data) mit echten Payload-Bytes zurueck.
+    - Pending-Path (via handle_payload_response, Zeile 189): gibt
+      DaResult::Available(vec![]) mit leerem Vektor zurueck.
+    Caller, die auf nicht-leere data im Available-Variant angewiesen sind,
+    erhalten je nach Timing unterschiedliche Ergebnisse. Das kann zu
+    stillen Logik-Fehlern in Downstream-Consumern fuehren.
+
+  Fix:
+    Option A: In handle_payload_response die serialisierten Payload-Bytes
+    an die Notifier senden statt vec![].
+    Option B: DaResult::Available zu einem Unit-Variant machen (ohne Daten)
+    und Caller immer ueber Storage holen lassen. Dann ist das Verhalten
+    konsistent.
+
+  Test:
+    Test: ensure_data_available zweimal aufrufen — einmal mit vorhandenen
+    Daten (Fast-Path), einmal ueber pending-Path → data.len() muss in
+    beiden Faellen > 0 sein (oder beide == 0, je nach Fix-Variante).
+
+[x] F119 — da_gating/mod.rs: handle_payload_response speichert nicht-angeforderte Payloads
+
+  Modul:  pc-da (da_gating)
+  Datei:  crates/pc-da/src/da_gating/mod.rs
+  Zeilen: 167-194
+  Prio:   P2
+  Confidence: medium
+
+  Risiko:
+    handle_payload_response akzeptiert jedes Payload und speichert es
+    in Storage — unabhaengig davon, ob jemand dieses Payload angefordert
+    hat. Ein Angreifer koennte massenhaft unrequested Payloads einschleusen
+    und den Storage fuellen (Storage-Amplification).
+    DaGatingManager hat max_pending fuer Requests, aber kein Storage-Limit.
+
+  Fix:
+    Vor dem Speichern pruefen, ob payload_hash in pending enthalten ist.
+    Wenn nicht: Payload verwerfen oder nur temporaer cachen.
+    Zusaetzlich: Storage-Size-Limit im DaGatingConfig einfuehren
+    (z.B. max_stored_payloads), Eviction-Policy (LRU oder aelteste zuerst).
+
+  Test:
+    Test: handle_payload_response mit einem Payload aufrufen, das niemand
+    angefordert hat → storage.size() darf nicht wachsen.
+    Stress-Test: 10.000 unrequested Payloads senden → Storage muss
+    begrenzt bleiben.
+
+================================================================================
+  ZUSAMMENFASSUNG
+================================================================================
+
+  P0 (Kritisch):   13 Findings  (9 Basis, +3 Runde 4, +1 Runde 5)
+  P1 (Hoch):       47 Findings  (20 Basis, +6 Runde 4, +4 Runde 5, +2 Runde 5b, +6 Runde 6, +5 Runde 7, +4 Runde 8)
+  P2 (Mittel):     57 Findings  (26 Basis, +7 Runde 4, +4 Runde 5, +3 Runde 5b, +6 Runde 6, +5 Runde 7, +4 Runde 8, +2 Runde 9)
+  ─────────────────────────────
+  Gesamt:         117 Findings
+
+  Analysierte Codebase:  ~62.600 Zeilen in 71 Dateien (100% gescannt)
+  Analysierte Binaries:  phantom-node, phantom-node-status, phantom-mint-rpc,
+                         quic_listen_with_metrics, mine_mint, genesis_bootstrap,
+                         gen_headers, gen_payloads, phantom-signer,
+                         bitbox02-signer, phantom-miner-gui,
+                         phantom-tui, phantom-tui-wallet, phantom-miner,
+                         phantom-gui-wallet
+  Analysierte Libraries: pc-state, pc-types, pc-crypto, pc-consensus, pc-codec,
+                         pc-p2p, pc-da, pc-netsim, pc-store,
+                         phantom-config, phantom-i18n
+
+================================================================================
+  ARBEITSANLEITUNG
+================================================================================
+
+  1. Alle P0-Findings zuerst abarbeiten (13 Stueck, inkl. F58-F60, F74)
+  2. Dann P1-Findings (47 Stueck, inkl. F61-F66, F75-F78, F83-F84, F88-F89, F92-F94, F96, F101-F103, F105-F106, F110-F113)
+  3. Dann P2-Findings (57 Stueck, inkl. F67-F73, F79-F82, F85-F87, F90-F91, F95, F97-F100, F104, F107-F109, F114-F119)
+
+  Pro Finding:
+    a) Beschriebenen Fix implementieren
+    b) Beschriebenen Test schreiben/ausfuehren
+    c) Checkbox auf [x] setzen
+    d) Commit mit "fix(audit): F<N> — <Kurzbeschreibung>"
+
+================================================================================

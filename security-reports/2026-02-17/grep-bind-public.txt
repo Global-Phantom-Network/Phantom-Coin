@@ -1,0 +1,24 @@
+./systemd/phantom-node.service:20:  --addr 0.0.0.0:9000 \
+./systemd/phantom-node-metrics.service:13:  --addr 0.0.0.0:9101
+./docs/deployment-guide.md:141:  --addr 0.0.0.0:9000 \
+./docs/deployment-guide.md:248:  --addr 0.0.0.0:9101
+./docs/deployment-guide.md:435:      --addr 0.0.0.0:9000
+./docs/deployment-guide.md:502:      --addr 0.0.0.0:9101
+./docs/STAKING.md:103:  --addr 0.0.0.0:9000 \
+./docs/STAKING.md:130:  --addr 0.0.0.0:9000 \
+./crates/phantom-node/src/main.rs:10996:    /// QUIC Listen-Adresse, z. B. 0.0.0.0:9000 (öffentlich) oder 127.0.0.1:9000 (nur lokal)
+./security-reports/2026-02-17/grep-network-bind.txt:80:./systemd/phantom-node.service:20:  --addr 0.0.0.0:9000 \
+./security-reports/2026-02-17/grep-network-bind.txt:178:./systemd/phantom-node-metrics.service:13:  --addr 0.0.0.0:9101
+./security-reports/2026-02-17/grep-network-bind.txt:582:./docs/STAKING.md:103:  --addr 0.0.0.0:9000 \
+./security-reports/2026-02-17/grep-network-bind.txt:584:./docs/STAKING.md:130:  --addr 0.0.0.0:9000 \
+./security-reports/2026-02-17/grep-network-bind.txt:1616:./docs/deployment-guide.md:141:  --addr 0.0.0.0:9000 \
+./security-reports/2026-02-17/grep-network-bind.txt:1617:./docs/deployment-guide.md:248:  --addr 0.0.0.0:9101
+./security-reports/2026-02-17/grep-network-bind.txt:1618:./docs/deployment-guide.md:435:      --addr 0.0.0.0:9000
+./security-reports/2026-02-17/grep-network-bind.txt:1619:./docs/deployment-guide.md:502:      --addr 0.0.0.0:9101
+./security-reports/2026-02-17/grep-network-bind.txt:3899:./crates/phantom-node/src/main.rs:10996:    /// QUIC Listen-Adresse, z. B. 0.0.0.0:9000 (öffentlich) oder 127.0.0.1:9000 (nur lokal)
+./security-reports/2026-02-17/grep-network-bind.txt:10084:./crates/phantom-gui-wallet/src/main.rs:2258:            // Use 0.0.0.0:9000 to accept inbound peers (requires explicit confirmation in the UI).
+./security-reports/2026-02-17/grep-network-bind.txt:11109:./crates/pc-p2p/src/lib.rs:1225:        let bind_addr: std::net::SocketAddr = match "0.0.0.0:0".parse() {
+./security-reports/2026-02-17/grep-network-bind.txt:17231:./crates/phantom-tui/src/node.rs:145:                    // Safer default: local-only. Use 0.0.0.0:9000 + unsafe_confirm to accept inbound peers.
+./crates/phantom-gui-wallet/src/main.rs:2258:            // Use 0.0.0.0:9000 to accept inbound peers (requires explicit confirmation in the UI).
+./crates/pc-p2p/src/lib.rs:1225:        let bind_addr: std::net::SocketAddr = match "0.0.0.0:0".parse() {
+./crates/phantom-tui/src/node.rs:145:                    // Safer default: local-only. Use 0.0.0.0:9000 + unsafe_confirm to accept inbound peers.

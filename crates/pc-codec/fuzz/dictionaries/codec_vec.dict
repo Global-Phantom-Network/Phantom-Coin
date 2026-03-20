@@ -1,0 +1,12 @@
+# libFuzzer dictionary for pc-codec Vec encoding/decoding
+# Common varint length prefixes
+"\x00"
+"\x01"
+"\x02"
+"\x7f"
+"\x80\x01"
+"\xff\x01"
+
+# Useful element patterns
+"\x00\x00\x00\x00"
+"\xff\xff\xff\xff"

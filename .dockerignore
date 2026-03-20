@@ -1,0 +1,14 @@
+.git
+.github
+target
+**/target
+apps/phantom-dashboard/node_modules
+apps/phantom-dashboard/dist
+apps/phantom-dashboard/src-tauri/target
+apps/phantom-dashboard/src-tauri/pc-data
+**/.DS_Store
+**/*.log
+.env
+/tmp
+/pc-data
+/pc-data*

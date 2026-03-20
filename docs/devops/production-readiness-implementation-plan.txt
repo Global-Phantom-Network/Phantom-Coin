@@ -1,0 +1,202 @@
+Production Readiness Umsetzungsplan
+
+Ziel
+Dieser Plan setzt die audit-relevanten Produktionsblocker in einer sinnvollen Reihenfolge um. Die Reihenfolge ist absichtlich so gewählt, dass zuerst Start- und Deploy-Blocker entfernt werden und erst danach Härtung und Release-Gates folgen.
+
+Priorität 1 - Deploy-Fläche reparieren
+
+1. Alle veralteten CLI-Aufrufe in Deploy-Artefakten ersetzen.
+   Betroffene Dateien:
+   - systemd/phantom-node.service
+   - systemd/phantom-node-status.service
+   - systemd/phantom-node-metrics.service
+   - docker-compose.yml
+   - deploy/docker-compose.yml
+   - systemd/README.md
+   Maßnahmen:
+   - CamelCase-Subcommands durch aktuelle kebab-case-Subcommands ersetzen.
+   - Snake-Case-Flags durch aktuelle CLI-Flags ersetzen.
+   - Alle Beispielkommandos auf denselben Stand bringen.
+   Ergebnis:
+   - Kein Deploy-Artefakt referenziert ungültige Subcommands oder Flags mehr.
+   Abnahmekriterium:
+   - Jeder dokumentierte Command kommt mindestens durch die Argumentvalidierung.
+
+2. P2P-Metrics-Command und Bind-Adresse bereinigen.
+   Maßnahmen:
+   - p2p-metrics-serve statt alter Namen verwenden.
+   - Öffentliche Metrics-Binds vermeiden.
+   Ergebnis:
+   - Monitoring startet technisch korrekt und ist nicht unnötig öffentlich.
+   Abnahmekriterium:
+   - Metrics sind nur über den vorgesehenen internen Pfad erreichbar.
+
+Priorität 2 - Genesis-Provisioning stabilisieren
+
+3. Einen autoritativen Genesis-Verteilpfad definieren.
+   Entscheidungspunkt:
+   - Entweder fest eingecheckte kanonische genesis_note.bin verteilen
+   - oder einen einmaligen Bootstrap-Schritt definieren, der dieselbe Datei erzeugt und auf alle Nodes ausrollt
+   Maßnahmen:
+   - Compose-Genesis-Schritt neu aufsetzen.
+   - Systemd-/Ops-Doku so anpassen, dass klar ist, woher genesis_note.bin kommt.
+   - Für jede Node den Zielpfad <store>/mempool/genesis_note.bin fest verankern.
+   Ergebnis:
+   - Jeder produktive Node startet mit identischer Genesis.
+   Abnahmekriterium:
+   - /status liefert auf allen Nodes dieselbe erwartete network_id.
+
+4. Genesis-Fehlerpfade in Doku und Staging explizit testen.
+   Maßnahmen:
+   - Negative Tests für fehlende oder falsche genesis_note.bin dokumentieren.
+   - Staging-Run mit echter kanonischer Genesis durchführen.
+   Ergebnis:
+   - Genesis-Mismatch wird früh erkannt und nicht erst im Rollout.
+   Abnahmekriterium:
+   - Dokumentierte Recovery-Prozedur für Genesis-Mismatch vorhanden.
+
+Priorität 3 - Konfigurationen sauber trennen
+
+5. Eigene Status-Serve-Konfiguration ausliefern.
+   Betroffene Dateien:
+   - configs/status-serve.toml (neu)
+   - systemd/phantom-node-status.service
+   - relevante Doku in docs/ und systemd/README.md
+   Maßnahmen:
+   - Root-Felder nach StatusConfig-Schema definieren.
+   - auth_token_file, require_auth, addr, mempool_dir, optional store_dir sauber abbilden.
+   Ergebnis:
+   - status-serve hat eine reale, parsebare Beispielkonfiguration.
+   Abnahmekriterium:
+   - phantom-node status-serve --config <datei> startet erfolgreich.
+
+6. Node- und Miner-Konfiguration von Status-Konfiguration trennen.
+   Betroffene Dateien:
+   - configs/node.toml
+   - configs/miner.toml (neu)
+   - docs/deployment-guide.md
+   - systemd/phantom-miner.service
+   Maßnahmen:
+   - node.toml nur für Node-/Consensus-relevante Parameter verwenden.
+   - miner.toml als echtes Produktionsbeispiel anlegen.
+   Ergebnis:
+   - Keine Konfigurationsdatei wird für eine inkompatible Runtime missbraucht.
+   Abnahmekriterium:
+   - README und Services verweisen jeweils auf die richtige Datei.
+
+Priorität 4 - Sicherheits- und Härtungsmaßnahmen
+
+7. Status-Auth und Secret-Handling auf Produktionsmodus fixieren.
+   Maßnahmen:
+   - Inline-Token aus Beispielen entfernen.
+   - auth_token_file als Standard dokumentieren.
+   - Dateirechte und Secret-Verteilung beschreiben.
+   Ergebnis:
+   - Geschützte Endpunkte sind standardmäßig abgesichert.
+   Abnahmekriterium:
+   - Nicht-öffentliche Endpunkte liefern ohne Token 401.
+
+8. Schreibrechte für validator_control unter systemd korrigieren.
+   Maßnahmen:
+   - Tatsächlichen Persistenzpfad prüfen.
+   - ReadWritePaths nur so weit wie nötig erweitern.
+   Ergebnis:
+   - Validator-Control funktioniert ohne unnötige Lockerung des Sandboxes.
+   Abnahmekriterium:
+   - POST /validator/control schreibt erfolgreich unter systemd.
+
+9. P2P-Rate-Limits produktionsfähig setzen.
+   Maßnahmen:
+   - Konkrete Defaultwerte für Header-, Inventory-, Request-, Response- und Byte-Limits festlegen.
+   - Per-Peer-Limits aktivieren.
+   - Werte in Deploy-Artefakte oder autoritative Config übernehmen.
+   Ergebnis:
+   - Basis-DoS-Schutz ist standardmäßig aktiv.
+   Abnahmekriterium:
+   - Flood-Tests triggern Limitierung statt Ressourcen-Explosion.
+
+10. Monitoring und Grafana härten.
+    Maßnahmen:
+    - Demo-Credentials entfernen.
+    - Pflicht-Secret für Admin-Zugang einführen.
+    - Monitoring-Endpunkte nicht unnötig öffentlich binden.
+    Ergebnis:
+    - Monitoring ist nicht mit bekannten Defaults kompromittierbar.
+    Abnahmekriterium:
+    - Kein Standard-Login und keine öffentliche Metrics-Exposition mehr.
+
+11. Miner-TLS auf sicheren Produktionspfad umstellen.
+    Maßnahmen:
+    - tls_ca für produktive HTTPS-Nutzung verbindlich machen.
+    - Unsichere Zertifikatsakzeptanz nur als expliziten Dev-Modus behandeln.
+    Ergebnis:
+    - Miner vertraut nur korrekt ausgestellten Zertifikaten.
+    Abnahmekriterium:
+    - Falsche Zertifikate werden im Produktionspfad abgelehnt.
+
+12. Dashboard/Tauri-Release-Modus härten.
+    Maßnahmen:
+    - bundle.active für Release aktivieren.
+    - Dev-WebSocket-Origins aus Release-CSP entfernen.
+    - Dev- und Prod-CSP klar trennen.
+    Ergebnis:
+    - Desktop-Release enthält keine Dev-Reste.
+    Abnahmekriterium:
+    - Release-Build zeigt keine Dev-Origin-Freigaben mehr.
+
+Priorität 5 - Release-Gates und Regression-Schutz
+
+13. Docker-Images reproducible und pinbar machen.
+    Maßnahmen:
+    - Base-Images per Digest pinnen.
+    - Update-Prozess für Digests dokumentieren.
+    Ergebnis:
+    - Rebuilds sind besser nachvollziehbar und Supply-Chain-Risiken reduziert.
+    Abnahmekriterium:
+    - Dockerfile enthält keine unpinned Base-Images mehr.
+
+14. Prod-Readiness-Smoke-Tests in CI ergänzen.
+    Maßnahmen:
+    - Validierung aller dokumentierten Service-Kommandos.
+    - Checks auf Demo-Credentials.
+    - Checks auf unpinned Docker-Images.
+    Ergebnis:
+    - Rückfälle in unsichere oder kaputte Deploy-Beispiele werden früh erkannt.
+    Abnahmekriterium:
+    - CI schlägt bei ungültigen Deploy-Artefakten oder bekannten Unsicherheiten fehl.
+
+15. Staging-Gate vor Production verpflichtend machen.
+    Maßnahmen:
+    - Ein vollständiger Staging-Durchlauf mit denselben Artefakten wie Production.
+    - Verifikation von Status-Auth, Genesis, Monitoring, Metrics und Miner-TLS.
+    Ergebnis:
+    - Production-Rollout erfolgt erst nach realer End-to-End-Bestätigung.
+    Abnahmekriterium:
+    - Schriftlich dokumentierter erfolgreicher Staging-Run.
+
+Empfohlene Reihenfolge für die Umsetzung
+
+Woche 1
+- Deploy-Kommandos reparieren
+- Genesis-Provisioning festziehen
+- Status-/Node-/Miner-Konfigs sauber trennen
+
+Woche 2
+- Auth, validator_control, Metrics-Binds und Grafana härten
+- P2P-Rate-Limits festlegen und testen
+- Miner-TLS absichern
+
+Woche 3
+- Dashboard-Release-Härtung
+- Docker-Digest-Pinning
+- CI-Smoke-Tests und Staging-Gate ergänzen
+
+Definition of Done
+- Keine kaputten Deploy-Beispiele mehr im Repo
+- Jede Runtime hat eine passende Beispielkonfiguration
+- Keine Demo-Credentials in Monitoring-Artefakten
+- Genesis-Verteilung ist eindeutig und reproduzierbar
+- Status-Endpunkte sind korrekt abgesichert
+- Metrics sind nicht unnötig öffentlich
+- Miner nutzt einen sicheren TLS-Pfad
+- Staging-Durchlauf mit Produktionsartefakten erfolgreich

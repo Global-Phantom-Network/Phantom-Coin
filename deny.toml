@@ -1,0 +1,42 @@
+# cargo-deny configuration
+# See: https://github.com/EmbarkStudios/cargo-deny
+
+[advisories]
+# Ignorierte Advisories (werden als Note geloggt)
+ignore = [
+    { id = "RUSTSEC-2024-0384", reason = "instant ist transitiv via libp2p (futures-ticker) unmaintained; kein sicheres Upgrade verfügbar. Beobachten und Upstream-Fix abwarten." },
+    { id = "RUSTSEC-2024-0436", reason = "paste unmaintained via netlink-stack; kein sicheres Upgrade verfügbar. Upstream-Wechsel zu pastey o.Ä. wird evaluiert." },
+    { id = "RUSTSEC-2025-0009", reason = "ring <0.17.12 Vulnerability; Upgrade-Pfad über quinn/rcgen in Planung. Temporär ignoriert für CI-Stabilisierung." },
+    { id = "RUSTSEC-2025-0010", reason = "ring <0.17 unmaintained; Upgrade in Roadmap (>=0.17.12). Temporär ignoriert bis Dep-Update." },
+    { id = "RUSTSEC-2025-0057", reason = "fxhash via sled unmaintained; temporär ignoriert bis Dep-Update." },
+]
+
+[licenses]
+# Erlaubte Lizenzen (SPDX 2.1/3.x kompatibel; cargo-deny akzeptiert hier "AGPL-3.0" als Bare-Identifier)
+allow = [
+    "AGPL-3.0", "AGPL-3.0-only",
+    "MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause",
+    "ISC", "Zlib", "Unicode-DFS-2016", "Unicode-3.0", "MPL-2.0", "CC0-1.0", "OpenSSL", "CDLA-Permissive-2.0",
+    "MIT-0", "0BSD", "BSL-1.0", "Apache-2.0 WITH LLVM-exception", "Unlicense"
+]
+# Erkennungs-Schwelle für Lizenztexte (niedriger = toleranter)
+confidence-threshold = 0.6
+exceptions = [
+    # ring kombiniert MIT/ISC/OpenSSL → ausnahmsweise zulassen
+    { crate = "ring", allow = ["MIT", "ISC", "OpenSSL"] },
+]
+
+[bans]
+# Mehrfachversionen vorerst warnen, bis Konsolidierung abgeschlossen ist
+multiple-versions = "warn"
+# Konsolidierte Skip-Liste im neuen Schema
+skip = [
+    { crate = "yamux", reason = "Transitiv via libp2p; wird später konsolidiert." },
+    { crate = "unsigned-varint", reason = "Transitiv via libp2p; wird später konsolidiert." },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = ["https://github.com/*"]

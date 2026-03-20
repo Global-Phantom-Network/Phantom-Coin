@@ -1,0 +1,53 @@
+[package]
+name = "pc-p2p-fuzz"
+version = "0.1.0"
+edition = "2021"
+publish = false
+autobins = false
+
+[dependencies]
+libfuzzer-sys = "0.4"
+pc-p2p = { path = ".." }
+pc-codec = { path = "../../pc-codec" }
+pc-types = { path = "../../pc-types" }
+
+[workspace]
+
+[[bin]]
+name = "p2p_message_decode"
+path = "fuzz_targets/p2p_message_decode.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "reqmsg_decode"
+path = "fuzz_targets/reqmsg_decode.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "respmsg_decode"
+path = "fuzz_targets/respmsg_decode.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "payloads_vec_decode"
+path = "fuzz_targets/payloads_vec_decode.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "headers_vec_decode"
+path = "fuzz_targets/headers_vec_decode.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "txs_vec_decode"
+path = "fuzz_targets/txs_vec_decode.rs"
+test = false
+bench = false
+
+[package.metadata]
+cargo-fuzz = true

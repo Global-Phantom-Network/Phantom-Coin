@@ -1,0 +1,132 @@
+================================================================================
+PHANTOM-COIN - MANUAL SECURITY DELTA SCAN (REVALIDATION)
+Date: 2026-02-17
+Scope: Dashboard + node integration paths (manual findings M001..M005)
+================================================================================
+
+Legend:
+  P0 = Critical
+  P1 = High
+  P2 = Medium
+  P3 = Low
+  [ ] = Open
+  [x] = Fixed + verified
+  [~] = Mitigated (residual operational action remains)
+
+Summary:
+  - Manual findings (initial): 5
+  - Current status: fixed 5 / mitigated 0 / open 0
+  - Distribution: P1: 2, P2: 2, P3: 1
+
+--------------------------------------------------------------------------------
+[x] M001 - Bearer token stored persistently in browser localStorage
+--------------------------------------------------------------------------------
+Severity:   P1
+Module:     phantom-dashboard frontend
+Files:      apps/phantom-dashboard/src/App.tsx:400
+            apps/phantom-dashboard/src/App.tsx:403
+            apps/phantom-dashboard/src/App.tsx:415
+            apps/phantom-dashboard/src/App.tsx:514
+Status:     fixed + verified
+Fix:
+  - Introduced session-only token storage (`sessionStorage` key:
+    `phantom.dashboard.token`).
+  - `saveAppConfig()` now scrubs persistent bearer token
+    (`bearerToken: ''` in localStorage payload).
+  - Legacy persistent token is migrated to session token once, then persisted config
+    keeps token empty.
+Verification:
+  - Grep confirms sessionStorage write/remove and localStorage scrub path only.
+
+--------------------------------------------------------------------------------
+[x] M002 - Runtime private keys and keystore material live inside source tree paths
+--------------------------------------------------------------------------------
+Severity:   P1
+Module:     dashboard runtime data placement
+Files:      apps/phantom-dashboard/src-tauri/src/main.rs:873
+            apps/phantom-dashboard/src-tauri/src/main.rs:957
+            apps/phantom-dashboard/src-tauri/src/main.rs:895
+Status:     fixed + verified
+Fix:
+  - Relative `store_dir` is now resolved under OS app-data (not CWD/source tree).
+  - Source-tree store dirs are explicitly rejected:
+    "Store-Verzeichnis im Repository-Quellbaum ist nicht erlaubt".
+  - Symlink escape out of app-data is rejected.
+  - Legacy sensitive files were moved out of source-tree runtime paths into
+    app-data quarantine:
+    `~/Library/Application Support/com.phantom.dashboard/security-quarantine/*`.
+  - Active-store key rotation executed:
+    `server.key`, `server.crt`, `p2p_quic_cert.der`, `validator_bls.ks.toml`,
+    and `status_auth_token.txt` were quarantined from active locations.
+Verification:
+  - No `server.key`, `validator_bls.ks.toml`, or `status_auth_token.txt` files
+    remain anywhere under repository paths.
+Operator note:
+  - Validator BLS keystore must be re-generated before validator duties resume.
+
+--------------------------------------------------------------------------------
+[x] M003 - Browser fallback path bypasses Tauri loopback guardrails
+--------------------------------------------------------------------------------
+Severity:   P2
+Module:     tauri-bridge browser fallback
+File:       apps/phantom-dashboard/src/tauri-bridge.ts:4
+            apps/phantom-dashboard/src/tauri-bridge.ts:21
+            apps/phantom-dashboard/src/tauri-bridge.ts:42
+Status:     fixed + verified
+Fix:
+  - Added loopback host/url guard in browser mode.
+  - Auth-bearing requests to non-loopback URLs now hard-fail with explicit error.
+Verification:
+  - `httpGet` and `httpGetFast` both call `guardBrowserBearerTarget(...)` before fetch.
+
+--------------------------------------------------------------------------------
+[x] M004 - Backup restore/copy destination permissions are not explicitly hardened
+--------------------------------------------------------------------------------
+Severity:   P2
+Module:     wallet backup/restore
+Files:      apps/phantom-dashboard/src-tauri/src/main.rs:315
+            apps/phantom-dashboard/src-tauri/src/main.rs:337
+            apps/phantom-dashboard/src-tauri/src/main.rs:1613
+            apps/phantom-dashboard/src-tauri/src/main.rs:1709
+            apps/phantom-dashboard/src-tauri/src/main.rs:1713
+Status:     fixed + verified
+Fix:
+  - Added private permission helpers for files/trees.
+  - Backup path now hardened recursively after write.
+  - Restore path now hardens restored wallet dir and seed file.
+  - Atomic temp file creation uses Unix mode `0o600`.
+
+--------------------------------------------------------------------------------
+[x] M005 - Aggressive orphan cleanup can kill unintended local processes (local DoS)
+--------------------------------------------------------------------------------
+Severity:   P3
+Module:     node process cleanup
+File:       apps/phantom-dashboard/src-tauri/src/main.rs:151
+            apps/phantom-dashboard/src-tauri/src/main.rs:156
+            apps/phantom-dashboard/src-tauri/src/main.rs:3124
+Status:     fixed + verified
+Fix:
+  - Cleanup now additionally requires the process cmdline to include the exact
+    dashboard-managed `store_dir_abs`.
+  - Non-matching processes are skipped and logged.
+Result:
+  - Significantly reduced risk of killing unrelated local processes.
+
+================================================================================
+Revalidation commands:
+  - cargo check --manifest-path apps/phantom-dashboard/src-tauri/Cargo.toml  (PASS)
+  - npm --prefix apps/phantom-dashboard run build                            (PASS)
+  - targeted grep checks for M001..M005 implementation paths                  (PASS)
+  - post-rotation smoke test (runtime)
+    * `phantom-node p2p-quic-listen` regenerates `p2p_quic_cert.der`          (PASS)
+    * `phantom-node status-serve` + bearer token auth `/status`               (PASS)
+    * `status_http` TLS autogen + `/status` via `--cacert server.crt`         (PASS)
+    * `phantom-signer keygen --algo bls` + `export-pub` + `bls-pop`           (PASS)
+      - BLS PK length: 96 hex
+      - BLS PoP length: 192 hex
+    * smoke-generated validator keystore/token re-quarantined after test       (PASS)
+
+Notes:
+  - Existing findings in SECURITY_FULL_SCAN_REPORT.txt remain valid and independent.
+  - This delta report tracks only manual findings M001..M005.
+================================================================================

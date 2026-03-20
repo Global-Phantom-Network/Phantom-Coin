@@ -1,0 +1,217 @@
+./semgrep.yml:24:          - pattern: Command::new("sh").arg("-c").arg($SCRIPT)
+./semgrep.yml:25:          - pattern: Command::new("sh").args(["-c", $SCRIPT, ...])
+./semgrep.yml:39:          - pattern: Command::new("bash").arg("-c").arg($SCRIPT)
+./semgrep.yml:40:          - pattern: Command::new("bash").arg("-lc").arg($SCRIPT)
+./semgrep.yml:41:          - pattern: Command::new("bash").args(["-c", $SCRIPT, ...])
+./semgrep.yml:42:          - pattern: Command::new("bash").args(["-lc", $SCRIPT, ...])
+./semgrep.yml:56:          - pattern: Command::new("zsh").arg("-c").arg($SCRIPT)
+./semgrep.yml:57:          - pattern: Command::new("zsh").args(["-c", $SCRIPT, ...])
+./crates/phantom-signer/src/main.rs:52:use std::process::Command;
+./crates/phantom-signer/src/main.rs:3351:            let mut cmd = Command::new(&hwi);
+./crates/phantom-signer/src/main.rs:3650:                let mut cmd = Command::new(&cmd_path);
+./crates/phantom-signer/tests/slashdb_cli.rs:4:use std::process::Command;
+./crates/phantom-signer/tests/slashdb_cli.rs:13:    let mut cmd_init = Command::new(assert_cmd::cargo::cargo_bin!("phantom-signer"));
+./crates/phantom-signer/tests/slashdb_cli.rs:23:    let mut cmd_get_none = Command::new(assert_cmd::cargo::cargo_bin!("phantom-signer"));
+./crates/phantom-signer/tests/slashdb_cli.rs:43:    let mut cmd_put = Command::new(assert_cmd::cargo::cargo_bin!("phantom-signer"));
+./crates/phantom-signer/tests/slashdb_cli.rs:61:    let mut cmd_get_some = Command::new(assert_cmd::cargo::cargo_bin!("phantom-signer"));
+./crates/phantom-signer/tests/slashdb_cli.rs:78:    let mut cmd_put_bad = Command::new(assert_cmd::cargo::cargo_bin!("phantom-signer"));
+./security-reports/2026-02-17/clippy-security.txt:2432:28 |       let out = Command::new(bin)
+./security-reports/2026-02-17/clippy-security.txt:2474:60 |       let out = Command::new(bin)
+./security-reports/2026-02-17/clippy-security.txt:2605:68 |       let mut child = Command::new(bin)
+./security-reports/2026-02-17/clippy-security.txt:2679:19 |       let out_import = Command::new(assert_cmd::cargo::cargo_bin!("phantom-signer"))
+./security-reports/2026-02-17/clippy-security.txt:2713:60 |       let out_sign = Command::new(assert_cmd::cargo::cargo_bin!("phantom-signer"))
+./security-reports/2026-02-17/clippy-security.txt:2757: 95 |       let out_pub = Command::new(assert_cmd::cargo::cargo_bin!("phantom-signer"))
+./security-reports/2026-02-17/clippy-security.txt:2919:61 |       let mut child = Command::new(bin)
+./security-reports/2026-02-17/clippy-security.txt:3137:236 |       let mut child = Command::new(bin)
+./security-reports/2026-02-17/clippy-security.txt:3471:21 |       let out_import = Command::new(assert_cmd::cargo::cargo_bin!("phantom-signer"))
+./security-reports/2026-02-17/clippy-security.txt:3518:48 |       let out_pub = Command::new(assert_cmd::cargo::cargo_bin!("phantom-signer"))
+./security-reports/2026-02-17/clippy-security.txt:3552: 80 |       let out_sign = Command::new(assert_cmd::cargo::cargo_bin!("phantom-signer"))
+./security-reports/2026-02-17/clippy-security.txt:4300:75 |       let mut child = Command::new(bin)
+./security-reports/2026-02-17/clippy-security.txt:4704:453 |       let mut child = Command::new(bin)
+./security-reports/2026-02-17/clippy-security.txt:4786:579 |       let mut http_child = Command::new(bin)
+./security-reports/2026-02-17/clippy-security.txt:4834:655 |       let out_inj_pl = Command::new(bin)
+./security-reports/2026-02-17/clippy-security.txt:4863:680 |       let out_inj_hdr = Command::new(bin)
+./security-reports/2026-02-17/clippy-security.txt:4927:727 |               let out_inj_pl = Command::new(bin)
+./security-reports/2026-02-17/clippy-security.txt:4956:752 |               let out_inj_hdr = Command::new(bin)
+./security-reports/2026-02-17/clippy-security.txt:5056:834 |       let mut http_child = Command::new(bin)
+./security-reports/2026-02-17/clippy-security.txt:5094:914 |       let st_inj_pl = Command::new(bin)
+./security-reports/2026-02-17/clippy-security.txt:5110:930 |       let st_inj_hdr = Command::new(bin)
+./security-reports/2026-02-17/clippy-security.txt:5780:68 |       let mut child = Command::new(bin)
+./security-reports/2026-02-17/clippy-security.txt:6213:37 |       let mut child = Command::new(bin)
+./security-reports/2026-02-17/clippy-security.txt:6447: 93 |       let mut child = Command::new(bin)
+./security-reports/2026-02-17/clippy-security.txt:6666:72 |       let mut child = Command::new(bin)
+./crates/phantom-signer/tests/seat_vote_sign_noninteractive.rs:4:use std::process::Command;
+./crates/phantom-signer/tests/seat_vote_sign_noninteractive.rs:19:    let out_import = Command::new(assert_cmd::cargo::cargo_bin!("phantom-signer"))
+./crates/phantom-signer/tests/seat_vote_sign_noninteractive.rs:44:    Command::new(assert_cmd::cargo::cargo_bin!("phantom-signer"))
+./crates/phantom-signer/tests/seat_vote_sign_noninteractive.rs:60:    let out_sign = Command::new(assert_cmd::cargo::cargo_bin!("phantom-signer"))
+./crates/phantom-signer/tests/seat_vote_sign_noninteractive.rs:95:    let out_pub = Command::new(assert_cmd::cargo::cargo_bin!("phantom-signer"))
+./crates/phantom-signer/tests/seat_vote_sign_noninteractive.rs:111:    Command::new(assert_cmd::cargo::cargo_bin!("phantom-signer"))
+./crates/phantom-signer/tests/f25_wallet_init_tty.rs:4:use std::process::Command;
+./crates/phantom-signer/tests/f25_wallet_init_tty.rs:9:    Command::new(assert_cmd::cargo::cargo_bin!("phantom-signer"))
+./apps/phantom-dashboard/src-tauri/src/main.rs:9:use std::process::Command;
+./apps/phantom-dashboard/src-tauri/src/main.rs:52:    let out = Command::new(ps)
+./apps/phantom-dashboard/src-tauri/src/main.rs:72:    let out = Command::new(ps)
+./apps/phantom-dashboard/src-tauri/src/main.rs:94:    Command::new(kill)
+./apps/phantom-dashboard/src-tauri/src/main.rs:111:    let out = Command::new(lsof_bin)
+./apps/phantom-dashboard/src-tauri/src/main.rs:1033:            let mut cmd = Command::new(&signer_path);
+./apps/phantom-dashboard/src-tauri/src/main.rs:1370:        let mut cmd = Command::new(&signer_path);
+./apps/phantom-dashboard/src-tauri/src/main.rs:1710:    let out = Command::new(&signer_path)
+./apps/phantom-dashboard/src-tauri/src/main.rs:1749:    let mut cmd = Command::new(&signer_path);
+./apps/phantom-dashboard/src-tauri/src/main.rs:1854:    let out_pk = Command::new(signer_path)
+./apps/phantom-dashboard/src-tauri/src/main.rs:1881:        let mut cmd = Command::new(signer_path);
+./apps/phantom-dashboard/src-tauri/src/main.rs:1943:        let mut cmd = Command::new(&signer_path);
+./apps/phantom-dashboard/src-tauri/src/main.rs:2113:        let mut cmd = Command::new(&signer_path);
+./apps/phantom-dashboard/src-tauri/src/main.rs:2233:        let mut cmd = Command::new(&signer_path);
+./apps/phantom-dashboard/src-tauri/src/main.rs:2371:        let mut cmd = Command::new(&signer_path);
+./apps/phantom-dashboard/src-tauri/src/main.rs:2993:    let mut cmd_p2p = Command::new(&phantom_node);
+./apps/phantom-dashboard/src-tauri/src/main.rs:3045:    let mut cmd_status = Command::new(&phantom_node);
+./apps/phantom-dashboard/src-tauri/src/main.rs:3072:        let mut cmd = Command::new(bin);
+./apps/phantom-dashboard/src-tauri/src/main.rs:3097:        let mut cmd = Command::new(bin);
+./apps/phantom-dashboard/src-tauri/src/main.rs:3672:            let lsof = Command::new(lsof_bin)
+./apps/phantom-dashboard/src-tauri/src/main.rs:3684:            let netstat = Command::new(netstat_bin)
+./apps/phantom-dashboard/src-tauri/src/main.rs:4026:    let out = Command::new(ps)
+./apps/phantom-dashboard/src-tauri/src/main.rs:4051:    let _ = Command::new(kill).args(["-INT", &pid.to_string()]).status();
+./apps/phantom-dashboard/src-tauri/src/main.rs:4059:    let out = Command::new(lsof_bin)
+./crates/phantom-signer/tests/seat_vote_sign_passfile.rs:21:    let out_import = Command::new(assert_cmd::cargo::cargo_bin!("phantom-signer"))
+./crates/phantom-signer/tests/seat_vote_sign_passfile.rs:48:    let out_pub = Command::new(assert_cmd::cargo::cargo_bin!("phantom-signer"))
+./crates/phantom-signer/tests/seat_vote_sign_passfile.rs:64:    Command::new(assert_cmd::cargo::cargo_bin!("phantom-signer"))
+./crates/phantom-signer/tests/seat_vote_sign_passfile.rs:80:    let out_sign = Command::new(assert_cmd::cargo::cargo_bin!("phantom-signer"))
+./crates/phantom-signer/tests/seat_vote_sign_passfile.rs:116:    Command::new(assert_cmd::cargo::cargo_bin!("phantom-signer"))
+./crates/phantom-signer/tests/seat_vote_sign_passfile.rs:137:    Command::new(assert_cmd::cargo::cargo_bin!("phantom-signer"))
+./crates/phantom-signer/tests/seat_vote_verify.rs:4:use std::process::Command;
+./crates/phantom-signer/tests/seat_vote_verify.rs:40:    let mut cmd_ok = Command::new(assert_cmd::cargo::cargo_bin!("phantom-signer"));
+./crates/phantom-signer/tests/seat_vote_verify.rs:61:    let mut cmd_fail = Command::new(assert_cmd::cargo::cargo_bin!("phantom-signer"));
+./crates/phantom-signer/tests/f26_hwi_signmessage_injection.rs:6:use std::process::Command;
+./crates/phantom-signer/tests/f26_hwi_signmessage_injection.rs:14:    Command::new(assert_cmd::cargo::cargo_bin!("phantom-signer"))
+./security-reports/2026-02-17/grep-network-bind.txt:191:./semgrep.yml:24:          - pattern: Command::new("sh").arg("-c").arg($SCRIPT)
+./security-reports/2026-02-17/grep-network-bind.txt:192:./semgrep.yml:25:          - pattern: Command::new("sh").args(["-c", $SCRIPT, ...])
+./security-reports/2026-02-17/grep-network-bind.txt:193:./semgrep.yml:39:          - pattern: Command::new("bash").arg("-c").arg($SCRIPT)
+./security-reports/2026-02-17/grep-network-bind.txt:194:./semgrep.yml:40:          - pattern: Command::new("bash").arg("-lc").arg($SCRIPT)
+./security-reports/2026-02-17/grep-network-bind.txt:195:./semgrep.yml:41:          - pattern: Command::new("bash").args(["-c", $SCRIPT, ...])
+./security-reports/2026-02-17/grep-network-bind.txt:196:./semgrep.yml:42:          - pattern: Command::new("bash").args(["-lc", $SCRIPT, ...])
+./security-reports/2026-02-17/grep-network-bind.txt:197:./semgrep.yml:56:          - pattern: Command::new("zsh").arg("-c").arg($SCRIPT)
+./security-reports/2026-02-17/grep-network-bind.txt:198:./semgrep.yml:57:          - pattern: Command::new("zsh").args(["-c", $SCRIPT, ...])
+./security-reports/2026-02-17/grep-network-bind.txt:656:./apps/phantom-dashboard/src-tauri/src/main.rs:9:use std::process::Command;
+./security-reports/2026-02-17/grep-network-bind.txt:672:./apps/phantom-dashboard/src-tauri/src/main.rs:52:    let out = Command::new(ps)
+./security-reports/2026-02-17/grep-network-bind.txt:674:./apps/phantom-dashboard/src-tauri/src/main.rs:72:    let out = Command::new(ps)
+./security-reports/2026-02-17/grep-network-bind.txt:676:./apps/phantom-dashboard/src-tauri/src/main.rs:94:    Command::new(kill)
+./security-reports/2026-02-17/grep-network-bind.txt:679:./apps/phantom-dashboard/src-tauri/src/main.rs:111:    let out = Command::new(lsof_bin)
+./security-reports/2026-02-17/grep-network-bind.txt:784:./apps/phantom-dashboard/src-tauri/src/main.rs:1033:            let mut cmd = Command::new(&signer_path);
+./security-reports/2026-02-17/grep-network-bind.txt:814:./apps/phantom-dashboard/src-tauri/src/main.rs:1370:        let mut cmd = Command::new(&signer_path);
+./security-reports/2026-02-17/grep-network-bind.txt:841:./apps/phantom-dashboard/src-tauri/src/main.rs:1710:    let out = Command::new(&signer_path)
+./security-reports/2026-02-17/grep-network-bind.txt:846:./apps/phantom-dashboard/src-tauri/src/main.rs:1749:    let mut cmd = Command::new(&signer_path);
+./security-reports/2026-02-17/grep-network-bind.txt:858:./apps/phantom-dashboard/src-tauri/src/main.rs:1854:    let out_pk = Command::new(signer_path)
+./security-reports/2026-02-17/grep-network-bind.txt:863:./apps/phantom-dashboard/src-tauri/src/main.rs:1881:        let mut cmd = Command::new(signer_path);
+./security-reports/2026-02-17/grep-network-bind.txt:870:./apps/phantom-dashboard/src-tauri/src/main.rs:1943:        let mut cmd = Command::new(&signer_path);
+./security-reports/2026-02-17/grep-network-bind.txt:889:./apps/phantom-dashboard/src-tauri/src/main.rs:2113:        let mut cmd = Command::new(&signer_path);
+./security-reports/2026-02-17/grep-network-bind.txt:902:./apps/phantom-dashboard/src-tauri/src/main.rs:2233:        let mut cmd = Command::new(&signer_path);
+./security-reports/2026-02-17/grep-network-bind.txt:914:./apps/phantom-dashboard/src-tauri/src/main.rs:2371:        let mut cmd = Command::new(&signer_path);
+./security-reports/2026-02-17/grep-network-bind.txt:974:./apps/phantom-dashboard/src-tauri/src/main.rs:2993:    let mut cmd_p2p = Command::new(&phantom_node);
+./security-reports/2026-02-17/grep-network-bind.txt:981:./apps/phantom-dashboard/src-tauri/src/main.rs:3045:    let mut cmd_status = Command::new(&phantom_node);
+./security-reports/2026-02-17/grep-network-bind.txt:987:./apps/phantom-dashboard/src-tauri/src/main.rs:3072:        let mut cmd = Command::new(bin);
+./security-reports/2026-02-17/grep-network-bind.txt:992:./apps/phantom-dashboard/src-tauri/src/main.rs:3097:        let mut cmd = Command::new(bin);
+./security-reports/2026-02-17/grep-network-bind.txt:1049:./apps/phantom-dashboard/src-tauri/src/main.rs:3672:            let lsof = Command::new(lsof_bin)
+./security-reports/2026-02-17/grep-network-bind.txt:1052:./apps/phantom-dashboard/src-tauri/src/main.rs:3684:            let netstat = Command::new(netstat_bin)
+./security-reports/2026-02-17/grep-network-bind.txt:1089:./apps/phantom-dashboard/src-tauri/src/main.rs:4026:    let out = Command::new(ps)
+./security-reports/2026-02-17/grep-network-bind.txt:1092:./apps/phantom-dashboard/src-tauri/src/main.rs:4051:    let _ = Command::new(kill).args(["-INT", &pid.to_string()]).status();
+./security-reports/2026-02-17/grep-network-bind.txt:1093:./apps/phantom-dashboard/src-tauri/src/main.rs:4059:    let out = Command::new(lsof_bin)
+./security-reports/2026-02-17/grep-network-bind.txt:1301:./security-reports/2026-02-17/clippy-security.txt:2432:28 |       let out = Command::new(bin)
+./security-reports/2026-02-17/grep-network-bind.txt:1305:./security-reports/2026-02-17/clippy-security.txt:2474:60 |       let out = Command::new(bin)
+./security-reports/2026-02-17/grep-network-bind.txt:1317:./security-reports/2026-02-17/clippy-security.txt:2605:68 |       let mut child = Command::new(bin)
+./security-reports/2026-02-17/grep-network-bind.txt:1321:./security-reports/2026-02-17/clippy-security.txt:2679:19 |       let out_import = Command::new(assert_cmd::cargo::cargo_bin!("phantom-signer"))
+./security-reports/2026-02-17/grep-network-bind.txt:1322:./security-reports/2026-02-17/clippy-security.txt:2713:60 |       let out_sign = Command::new(assert_cmd::cargo::cargo_bin!("phantom-signer"))
+./security-reports/2026-02-17/grep-network-bind.txt:1324:./security-reports/2026-02-17/clippy-security.txt:2757: 95 |       let out_pub = Command::new(assert_cmd::cargo::cargo_bin!("phantom-signer"))
+./security-reports/2026-02-17/grep-network-bind.txt:1336:./security-reports/2026-02-17/clippy-security.txt:2919:61 |       let mut child = Command::new(bin)
+./security-reports/2026-02-17/grep-network-bind.txt:1353:./security-reports/2026-02-17/clippy-security.txt:3137:236 |       let mut child = Command::new(bin)
+./security-reports/2026-02-17/grep-network-bind.txt:1375:./security-reports/2026-02-17/clippy-security.txt:3471:21 |       let out_import = Command::new(assert_cmd::cargo::cargo_bin!("phantom-signer"))
+./security-reports/2026-02-17/grep-network-bind.txt:1376:./security-reports/2026-02-17/clippy-security.txt:3518:48 |       let out_pub = Command::new(assert_cmd::cargo::cargo_bin!("phantom-signer"))
+./security-reports/2026-02-17/grep-network-bind.txt:1377:./security-reports/2026-02-17/clippy-security.txt:3552: 80 |       let out_sign = Command::new(assert_cmd::cargo::cargo_bin!("phantom-signer"))
+./security-reports/2026-02-17/grep-network-bind.txt:1436:./security-reports/2026-02-17/clippy-security.txt:4300:75 |       let mut child = Command::new(bin)
+./security-reports/2026-02-17/grep-network-bind.txt:1459:./security-reports/2026-02-17/clippy-security.txt:4704:453 |       let mut child = Command::new(bin)
+./security-reports/2026-02-17/grep-network-bind.txt:1466:./security-reports/2026-02-17/clippy-security.txt:4786:579 |       let mut http_child = Command::new(bin)
+./security-reports/2026-02-17/grep-network-bind.txt:1469:./security-reports/2026-02-17/clippy-security.txt:4834:655 |       let out_inj_pl = Command::new(bin)
+./security-reports/2026-02-17/grep-network-bind.txt:1472:./security-reports/2026-02-17/clippy-security.txt:4863:680 |       let out_inj_hdr = Command::new(bin)
+./security-reports/2026-02-17/grep-network-bind.txt:1476:./security-reports/2026-02-17/clippy-security.txt:4927:727 |               let out_inj_pl = Command::new(bin)
+./security-reports/2026-02-17/grep-network-bind.txt:1479:./security-reports/2026-02-17/clippy-security.txt:4956:752 |               let out_inj_hdr = Command::new(bin)
+./security-reports/2026-02-17/grep-network-bind.txt:1487:./security-reports/2026-02-17/clippy-security.txt:5056:834 |       let mut http_child = Command::new(bin)
+./security-reports/2026-02-17/grep-network-bind.txt:1489:./security-reports/2026-02-17/clippy-security.txt:5094:914 |       let st_inj_pl = Command::new(bin)
+./security-reports/2026-02-17/grep-network-bind.txt:1490:./security-reports/2026-02-17/clippy-security.txt:5110:930 |       let st_inj_hdr = Command::new(bin)
+./security-reports/2026-02-17/grep-network-bind.txt:1514:./security-reports/2026-02-17/clippy-security.txt:5780:68 |       let mut child = Command::new(bin)
+./security-reports/2026-02-17/grep-network-bind.txt:1537:./security-reports/2026-02-17/clippy-security.txt:6213:37 |       let mut child = Command::new(bin)
+./security-reports/2026-02-17/grep-network-bind.txt:1554:./security-reports/2026-02-17/clippy-security.txt:6447: 93 |       let mut child = Command::new(bin)
+./security-reports/2026-02-17/grep-network-bind.txt:1574:./security-reports/2026-02-17/clippy-security.txt:6666:72 |       let mut child = Command::new(bin)
+./security-reports/2026-02-17/grep-network-bind.txt:5127:./security-reports/2026-02-17/grep-command-exec.txt:1:./semgrep.yml:24:          - pattern: Command::new("sh").arg("-c").arg($SCRIPT)
+./security-reports/2026-02-17/grep-network-bind.txt:5128:./security-reports/2026-02-17/grep-command-exec.txt:2:./semgrep.yml:25:          - pattern: Command::new("sh").args(["-c", $SCRIPT, ...])
+./security-reports/2026-02-17/grep-network-bind.txt:5129:./security-reports/2026-02-17/grep-command-exec.txt:3:./semgrep.yml:39:          - pattern: Command::new("bash").arg("-c").arg($SCRIPT)
+./security-reports/2026-02-17/grep-network-bind.txt:5130:./security-reports/2026-02-17/grep-command-exec.txt:4:./semgrep.yml:40:          - pattern: Command::new("bash").arg("-lc").arg($SCRIPT)
+./security-reports/2026-02-17/grep-network-bind.txt:5131:./security-reports/2026-02-17/grep-command-exec.txt:5:./semgrep.yml:41:          - pattern: Command::new("bash").args(["-c", $SCRIPT, ...])
+./security-reports/2026-02-17/grep-network-bind.txt:5132:./security-reports/2026-02-17/grep-command-exec.txt:6:./semgrep.yml:42:          - pattern: Command::new("bash").args(["-lc", $SCRIPT, ...])
+./security-reports/2026-02-17/grep-network-bind.txt:5133:./security-reports/2026-02-17/grep-command-exec.txt:7:./semgrep.yml:56:          - pattern: Command::new("zsh").arg("-c").arg($SCRIPT)
+./security-reports/2026-02-17/grep-network-bind.txt:5134:./security-reports/2026-02-17/grep-command-exec.txt:8:./semgrep.yml:57:          - pattern: Command::new("zsh").args(["-c", $SCRIPT, ...])
+./security-reports/2026-02-17/grep-network-bind.txt:5135:./security-reports/2026-02-17/grep-command-exec.txt:9:./crates/phantom-signer/src/main.rs:52:use std::process::Command;
+./security-reports/2026-02-17/grep-network-bind.txt:5136:./security-reports/2026-02-17/grep-command-exec.txt:10:./crates/phantom-signer/src/main.rs:3351:            let mut cmd = Command::new(&hwi);
+./security-reports/2026-02-17/grep-network-bind.txt:5137:./security-reports/2026-02-17/grep-command-exec.txt:11:./crates/phantom-signer/src/main.rs:3650:                let mut cmd = Command::new(&cmd_path);
+./crates/phantom-tui/src/signer.rs:24:use std::process::Command;
+./crates/phantom-tui/src/signer.rs:1626:        let mut cmd = Command::new(&cmd_path);
+./crates/phantom-tui/src/node.rs:650:    let mut cmd = Command::new(&binary_path);
+./crates/phantom-tui/src/tools.rs:367:    let mut cmd = Command::new(&prog_path);
+./crates/phantom-tui/src/wallet.rs:741:        std::process::Command::new(bin)
+./crates/phantom-tui/src/wallet.rs:745:            let mut cmd = std::process::Command::new("cargo");
+./crates/phantom-node/tests/audit_evidence_f5_f15_f77_f82.rs:117:    let mut cmd = std::process::Command::new(bin);
+./crates/phantom-node/tests/p2p_metrics_smoke.rs:47:    let mut child = Command::new(bin)
+./crates/phantom-node/tests/tls_impersonation_a1.rs:4:use std::process::Command;
+./crates/phantom-node/tests/tls_impersonation_a1.rs:9:    let out = Command::new(bin)
+./crates/phantom-node/tests/tls_impersonation_a1.rs:33:    let out = Command::new(bin)
+./crates/phantom-node/tests/tls_impersonation_a1.rs:58:    let out = Command::new(bin)
+./crates/phantom-node/tests/vrf_endpoints.rs:61:    let mut child = Command::new(bin)
+./crates/phantom-node/tests/vrf_endpoints.rs:236:    let mut child = Command::new(bin)
+./crates/phantom-node/tests/auth_endpoints.rs:75:    let mut child = Command::new(bin)
+./crates/phantom-node/tests/f17_seed_reservation_race.rs:93:    let mut child = Command::new(bin)
+./crates/phantom-gui-wallet/src/main.rs:452:    let output = Command::new(&signer_path)
+./crates/phantom-gui-wallet/src/main.rs:495:    let mut cmd = Command::new(&signer_path);
+./crates/phantom-gui-wallet/src/main.rs:640:        Command::new("osascript")
+./crates/phantom-gui-wallet/src/main.rs:667:        if Command::new("gnome-terminal")
+./crates/phantom-gui-wallet/src/main.rs:680:        if Command::new("xterm")
+./crates/phantom-gui-wallet/src/main.rs:695:        Command::new("cmd")
+./crates/phantom-gui-wallet/src/main.rs:905:            let mut cmd = Command::new(bin);
+./crates/phantom-gui-wallet/src/main.rs:915:            let mut cmd = Command::new(cargo_bin);
+./crates/phantom-gui-wallet/src/main.rs:2829:        let mut cmd = Command::new(&node_bin_str);
+./crates/phantom-gui-wallet/src/main.rs:3126:            let _ = Command::new("killall")
+./crates/phantom-gui-wallet/src/main.rs:3131:            let _ = Command::new("killall")
+./crates/phantom-gui-wallet/src/main.rs:3136:            let _ = Command::new("killall")
+./crates/phantom-gui-wallet/src/main.rs:3302:                let mut mint_cmd = Command::new(&mint_rpc_str);
+./crates/phantom-gui-wallet/src/main.rs:3932:                let mut cmd = Command::new(cargo_bin);
+./crates/phantom-gui-wallet/src/main.rs:3958:            return Some((Command::new(bin_path), desc));
+./crates/phantom-gui-wallet/src/main.rs:3969:        return Some((Command::new(path), desc));
+./crates/phantom-gui-wallet/src/main.rs:3975:            Command::new("status_http"),
+./crates/phantom-gui-wallet/src/main.rs:4019:    let mut cmd = Command::new(cargo_bin);
+./crates/phantom-gui-wallet/src/main.rs:5680:                let mut cmd = Command::new(&signer_path);
+./crates/phantom-node/tests/config_downgrade_a10.rs:4:use std::process::Command;
+./crates/phantom-node/tests/config_downgrade_a10.rs:28:    let out = Command::new(bin)
+./crates/phantom-node/tests/config_downgrade_a10.rs:60:    let out = Command::new(bin)
+./crates/phantom-node/tests/da_gating_config.rs:68:    let mut child = Command::new(bin)
+./crates/phantom-node/tests/http_api_remote_control_a3.rs:37:    let mut child = Command::new(bin)
+./crates/phantom-node/tests/attestor_endpoints.rs:91:    let mut child = Command::new(bin)
+./crates/phantom-node/tests/bls_endpoints.rs:72:    let mut child = Command::new(bin)
+./crates/phantom-node/tests/da_gating_retry_metrics_e2e.rs:112:    let mut child = Command::new(bin)
+./crates/phantom-node/tests/da_gating_retry_metrics_e2e.rs:201:    let mut inj = Command::new(bin)
+./crates/phantom-node/tests/mint_pow_e2e_8_11.rs:290:    let mut cmd = Command::new(bin);
+./crates/phantom-node/tests/mint_pow_e2e_8_11.rs:453:    let mut child = Command::new(bin)
+./crates/phantom-node/tests/mint_pow_e2e_8_11.rs:579:    let mut http_child = Command::new(bin)
+./crates/phantom-node/tests/mint_pow_e2e_8_11.rs:655:    let out_inj_pl = Command::new(bin)
+./crates/phantom-node/tests/mint_pow_e2e_8_11.rs:680:    let out_inj_hdr = Command::new(bin)
+./crates/phantom-node/tests/mint_pow_e2e_8_11.rs:727:            let out_inj_pl = Command::new(bin)
+./crates/phantom-node/tests/mint_pow_e2e_8_11.rs:752:            let out_inj_hdr = Command::new(bin)
+./crates/phantom-node/tests/mint_pow_e2e_8_11.rs:834:    let mut http_child = Command::new(bin)
+./crates/phantom-node/tests/mint_pow_e2e_8_11.rs:914:    let st_inj_pl = Command::new(bin)
+./crates/phantom-node/tests/mint_pow_e2e_8_11.rs:930:    let st_inj_hdr = Command::new(bin)
+./crates/phantom-node/tests/future_time_attack_a2.rs:68:    let mut child = Command::new(bin)
+./crates/phantom-node/tests/mint_pow_e2e_12_15.rs:323:    let mut cmd = Command::new(bin);
+./crates/phantom-node/tests/mint_pow_e2e_12_15.rs:344:    let out = Command::new(bin)
+./crates/phantom-node/tests/mint_pow_e2e_12_15.rs:370:    let out = Command::new(bin)
+./crates/phantom-node/tests/mint_pow_e2e_12_15.rs:557:    let mut child = Command::new(bin)
+./crates/phantom-node/tests/f19_f20_mint_rpc_standalone.rs:78:    let mut child = Command::new(bin)
+./crates/phantom-tui-wallet/src/main.rs:366:        std::process::Command::new(bin)
+./crates/phantom-tui-wallet/src/main.rs:370:            let mut cmd = std::process::Command::new("cargo");
+./crates/bitbox-api-rs/tests/util/mod.rs:41:        //let mut command = Command::new(filename);
+./crates/bitbox-api-rs/tests/util/mod.rs:43:        let mut command = Command::new("stdbuf");

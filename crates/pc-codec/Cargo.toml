@@ -1,0 +1,10 @@
+[package]
+name = "pc-codec"
+version = "0.1.1"
+edition = "2021"
+license = "AGPL-3.0-only"
+
+[dependencies]
+
+[dev-dependencies]
+proptest = "1.5"

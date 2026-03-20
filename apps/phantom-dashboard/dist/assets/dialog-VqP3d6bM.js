@@ -1,0 +1,1 @@
+import{i as o}from"./tauri-DOt0uGIP.js";import"./tauri-sAj06WXf.js";async function i(e={}){return typeof e=="object"&&Object.freeze(e),o({__tauriModule:"Dialog",message:{cmd:"openDialog",options:e}})}export{i as open};

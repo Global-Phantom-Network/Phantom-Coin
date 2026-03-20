@@ -1,0 +1,42 @@
+[package]
+name = "pc-state-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+pc-state = { path = ".." }
+pc-types = { path = "../../pc-types" }
+pc-crypto = { path = "../../pc-crypto" }
+
+[dependencies.arbitrary]
+version = "1"
+features = ["derive"]
+
+[[bin]]
+name = "utxo_apply_mint"
+path = "fuzz_targets/utxo_apply_mint.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "utxo_apply_microtx"
+path = "fuzz_targets/utxo_apply_microtx.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "utxo_state_snapshot"
+path = "fuzz_targets/utxo_state_snapshot.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "utxo_merkle_root"
+path = "fuzz_targets/utxo_merkle_root.rs"
+test = false
+doc = false

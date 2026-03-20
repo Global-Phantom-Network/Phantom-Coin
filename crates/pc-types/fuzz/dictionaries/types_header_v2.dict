@@ -1,0 +1,14 @@
+# libFuzzer dictionary for pc-types AnchorHeaderV2
+# Common small integers and booleans
+"\x00"
+"\x01"
+"\x02"
+"\x7f"
+"\x80\x01"
+# ack_present flags
+"\x00"
+"\x01"
+# shard_id u16 little-endian examples
+"\x00\x00"
+"\x01\x00"
+"\x34\x12"

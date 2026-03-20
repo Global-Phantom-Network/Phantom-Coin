@@ -1,0 +1,37 @@
+{
+  "build": {
+    "beforeBuildCommand": "npm run build:tauri-prep",
+    "beforeDevCommand": "npm run dev",
+    "devPath": "http://127.0.0.1:5173",
+    "distDir": "../dist"
+  },
+  "package": {
+    "productName": "Phantom.Coin Miner Dashboard",
+    "version": "0.1.0"
+  },
+  "tauri": {
+    "allowlist": {
+      "all": false,
+      "dialog": {
+        "open": true
+      }
+    },
+    "bundle": {
+      "active": false,
+      "targets": "all",
+      "identifier": "com.phantom.dashboard",
+      "icon": ["icons/icon.icns", "icons/icon.png", "icons/icon.svg"]
+    },
+    "security": {
+      "csp": "default-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'; frame-ancestors 'none'; img-src 'self' data: blob: asset: https://asset.localhost; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; script-src-attr 'none'; connect-src 'self' ipc: http://ipc.localhost https://ipc.localhost ws://127.0.0.1:5173 ws://localhost:5173 ws://[::1]:5173;"
+    },
+    "windows": [
+      {
+        "title": "Phantom.Coin Miner Dashboard",
+        "width": 1536,
+        "height": 960,
+        "resizable": true
+      }
+    ]
+  }
+}

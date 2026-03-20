@@ -1,0 +1,115 @@
+name: Runtime Verification
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/runtime-verification.yml'
+      - 'scripts/verify_runtime_paths_ci.sh'
+      - 'scripts/verify_systemd_runtime_ci.sh'
+      - 'configs/**'
+      - 'systemd/**'
+      - 'crates/phantom-node/**'
+      - 'crates/phantom-miner/**'
+      - 'crates/phantom-config/**'
+      - 'crates/pc-consensus/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/runtime-verification.yml'
+      - 'scripts/verify_runtime_paths_ci.sh'
+      - 'scripts/verify_systemd_runtime_ci.sh'
+      - 'configs/**'
+      - 'systemd/**'
+      - 'crates/phantom-node/**'
+      - 'crates/phantom-miner/**'
+      - 'crates/phantom-config/**'
+      - 'crates/pc-consensus/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  workflow_dispatch:
+    inputs:
+      run_systemd_job:
+        description: 'Run the self-hosted systemd verification job'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  hosted-runtime-checks:
+    name: Hosted runtime checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build runtime binaries
+        run: cargo build -p phantom-node -p phantom-miner --bins
+
+      - name: Run hosted runtime verification
+        env:
+          KEEP_WORK_DIR: '1'
+          WORK_DIR: ${{ runner.temp }}/runtime-verification
+        run: |
+          mkdir -p "$WORK_DIR"
+          chmod +x scripts/verify_runtime_paths_ci.sh
+          scripts/verify_runtime_paths_ci.sh
+
+      - name: Run P2P rate-limit runtime smoke
+        run: cargo test -p phantom-node --test p2p_metrics_smoke
+
+      - name: Upload hosted runtime artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-verification-hosted
+          path: ${{ runner.temp }}/runtime-verification
+          if-no-files-found: ignore
+
+  systemd-runtime-checks:
+    name: Self-hosted systemd checks
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_systemd_job }}
+    runs-on:
+      - self-hosted
+      - linux
+      - x64
+      - systemd
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build runtime binaries
+        run: cargo build -p phantom-node --bins
+
+      - name: Run self-hosted systemd verification
+        env:
+          KEEP_WORK_DIR: '1'
+          WORK_DIR: ${{ runner.temp }}/runtime-verification-systemd
+        run: |
+          mkdir -p "$WORK_DIR"
+          chmod +x scripts/verify_systemd_runtime_ci.sh
+          scripts/verify_systemd_runtime_ci.sh
+
+      - name: Upload systemd runtime artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-verification-systemd
+          path: ${{ runner.temp }}/runtime-verification-systemd
+          if-no-files-found: ignore

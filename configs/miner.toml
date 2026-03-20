@@ -1,0 +1,4 @@
+node_url = "https://127.0.0.1:8443"
+status_path = "/status"
+interval_ms = 1000
+tls_ca = "/etc/phantom-coin/certs/ca.crt"

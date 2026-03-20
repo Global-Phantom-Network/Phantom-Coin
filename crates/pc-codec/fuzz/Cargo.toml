@@ -1,0 +1,28 @@
+[package]
+name = "pc-codec-fuzz"
+version = "0.1.0"
+edition = "2021"
+publish = false
+autobins = false
+
+[dependencies]
+libfuzzer-sys = "0.4"
+pc-codec = { path = ".." }
+
+[workspace]
+
+[[bin]]
+name = "codec_varint"
+path = "fuzz_targets/codec_varint.rs"
+test = false
+bench = false
+
+
+[[bin]]
+name = "codec_vec"
+path = "fuzz_targets/codec_vec.rs"
+test = false
+bench = false
+
+[package.metadata]
+cargo-fuzz = true

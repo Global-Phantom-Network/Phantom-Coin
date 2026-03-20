@@ -1,0 +1,60 @@
+Strikter Production-Readiness-Umsetzungsplan
+
+Scope
+Dieser Plan deckt die strenge Variante der zuvor identifizierten Maßnahmen ab:
+- P1.1 P2P-Rate-Limits verbindlich setzen
+- P1.2 Monitoring-Defaults härten
+- P1.3 validator_control-Schreibpfade unter systemd korrigieren
+- P1.4 Status-Serve-Exposition nicht mehr missverständlich deployen
+- P1.5 Miner-TLS ohne implizit unsicheren Localhost-Sonderfall
+- optional P2.2 Dashboard/Tauri-Release-Härtung
+- optional P2.1 nur dann, wenn belastbare Docker-Digests vorliegen
+
+Phase 1 - Deploy- und Service-Härtung
+1. systemd-Units auf aktuelle CLI und harte Defaults bringen.
+   - phantom-node.service
+   - phantom-node-status.service
+   - phantom-node-metrics.service
+   - phantom-miner.service
+   Ziele:
+   - gültige Subcommands und Flags
+   - explizite P2P-Rate-Limits
+   - keine unnötig öffentlichen Metrics-Binds
+   - korrekte ReadWritePaths für validator_control
+
+2. Compose-Deploys an denselben Sicherheitsstandard anpassen.
+   - docker-compose.yml
+   - deploy/docker-compose.yml
+   Ziele:
+   - keine Demo-Credentials
+   - keine missverständliche direkte Status-Exposition
+   - konsistente Runtime-Kommandos
+
+Phase 2 - Runtime-Sicherheitsänderungen
+3. Miner-HTTP-Client härten.
+   Ziele:
+   - keine automatische Akzeptanz ungültiger Zertifikate nur wegen localhost
+   - klarer Produktionspfad mit CA-Validierung
+
+4. Dashboard/Tauri-Release-Konfiguration härten.
+   Ziele:
+   - Release-Bundle aktiv
+   - keine Dev-WebSocket-Origins in der Release-CSP
+
+Phase 3 - Optionale Zusatzhärtung
+5. Docker-Digest-Pinning nur mit verifizierten Digests umsetzen.
+   Bedingung:
+   - keine erfundenen sha256-Digests verwenden
+   - wenn keine belastbaren Digests im Repo vorliegen, Punkt offen lassen und dokumentieren
+
+Phase 4 - Verifikation
+6. Nach jeder Änderung die zugehörigen Startkommandos und Konfigurationsannahmen gegen den aktuellen Code abgleichen.
+7. Abschließend genaue lokale Prüfkommandos dokumentieren, die du selbst ausführen kannst.
+
+Definition of Done
+- systemd- und Compose-Artefakte sind auf strikteren Produktionsbetrieb ausgerichtet
+- Status- und Metrics-Exposition ist nicht mehr missverständlich oder unnötig offen
+- P2P-Rate-Limits sind in den produktionsnahen Artefakten explizit gesetzt
+- Miner akzeptiert ungültige TLS-Zertifikate nicht mehr implizit
+- Dashboard-Release-Konfiguration enthält keine offensichtlichen Dev-Reste mehr
+- optionales Docker-Digest-Pinning wird nur mit echten Digests umgesetzt

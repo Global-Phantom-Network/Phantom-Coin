@@ -1,0 +1,38 @@
+[Unit]
+Description=Phantom-Coin Status API Server
+Documentation=https://github.com/phantom-coin/phantom-coin
+After=network-online.target phantom-node.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=phantom
+Group=phantom
+WorkingDirectory=/opt/phantom-coin
+Environment="RUST_LOG=info"
+
+ExecStart=/opt/phantom-coin/bin/phantom-node \
+  status-serve \
+  --config /etc/phantom-coin/status-serve.toml \
+  --genesis-note /etc/phantom-coin/genesis_note.bin
+
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=15s
+KillMode=mixed
+
+LimitNOFILE=65535
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/phantom-coin/data
+ReadOnlyPaths=/etc/phantom-coin
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=phantom-status
+
+[Install]
+WantedBy=multi-user.target

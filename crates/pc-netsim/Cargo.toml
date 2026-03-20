@@ -1,0 +1,14 @@
+[package]
+name = "pc-netsim"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+rand = "0.8"
+pc-p2p = { path = "../pc-p2p" }
+pc-types = { path = "../pc-types" }
+
+[dev-dependencies]
+proptest = "1.0"

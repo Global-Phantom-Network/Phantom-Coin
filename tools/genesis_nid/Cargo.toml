@@ -1,0 +1,9 @@
+[package]
+name = "genesis_nid"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+
+[dependencies]
+blake3 = "1"

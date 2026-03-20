@@ -1,0 +1,45 @@
+name: BitBox WASM Verification
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/bitbox-wasm-verification.yml'
+      - 'scripts/verify_bitbox_wasm_ci.sh'
+      - 'crates/bitbox-api-rs/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/bitbox-wasm-verification.yml'
+      - 'scripts/verify_bitbox_wasm_ci.sh'
+      - 'crates/bitbox-api-rs/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  workflow_dispatch:
+
+jobs:
+  bitbox-wasm:
+    name: Optional bitbox-api wasm check
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install LLVM
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm clang
+
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Verify optional bitbox-api wasm path
+        run: |
+          chmod +x scripts/verify_bitbox_wasm_ci.sh
+          scripts/verify_bitbox_wasm_ci.sh

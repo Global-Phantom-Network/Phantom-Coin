@@ -1,0 +1,33 @@
+# Build artifacts
+**/target/
+
+# Runtime data and local secrets (must never be committed)
+pc-data/
+pc-data-validator/
+apps/phantom-dashboard/src-tauri/pc-data/
+
+# Sensitive runtime artifacts
+**/server.key
+**/server.crt
+**/validator_bls.ks.toml
+**/seat_bls.toml
+**/payout_schnorr.toml
+**/status_auth_token.txt
+
+# macOS
+.DS_Store
+
+# Temporary / local
+.tmp/
+baseline-source-*/
+bench-reports/
+genesis-reset-backups/
+target-dashboard-check*/
+target-dashboard-quick/
+target-quick-check/
+deny-bans-output.txt
+fix_main.py
+Node
+
+# IDE
+.windsurf/

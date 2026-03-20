@@ -1,0 +1,7 @@
+config_version = 1
+addr = "127.0.0.1:8080"
+mempool_dir = "/var/lib/phantom-coin/data/mempool"
+store_dir = "/var/lib/phantom-coin/data"
+fsync = true
+require_auth = true
+auth_token_file = "/etc/phantom-coin/status-auth.token"

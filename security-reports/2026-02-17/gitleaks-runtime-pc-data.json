@@ -1,0 +1,22 @@
+[
+ {
+  "RuleID": "private-key",
+  "Description": "Identified a Private Key, which may compromise cryptographic security and sensitive data encryption.",
+  "StartLine": 1,
+  "EndLine": 5,
+  "StartColumn": 1,
+  "EndColumn": 26,
+  "Match": "REDACTED",
+  "Secret": "REDACTED",
+  "File": "pc-data/server.key",
+  "SymlinkFile": "",
+  "Commit": "",
+  "Entropy": 5.6974373,
+  "Author": "",
+  "Email": "",
+  "Date": "",
+  "Message": "",
+  "Tags": [],
+  "Fingerprint": "pc-data/server.key:private-key:1"
+ }
+]

@@ -1,0 +1,16 @@
+# libFuzzer dictionary for pc-codec varint (u64, LEB128 base-128)
+# Single-byte terminators
+"\x00"
+"\x01"
+"\x7f"
+# Continuation bytes and boundaries
+"\x80"
+"\x81"
+"\xff"
+# Two-byte examples
+"\x80\x01"
+"\xff\x01"
+"\x80\x80"
+# Larger encodings (prefixes)
+"\x80\x80\x01"
+"\xff\xff\x01"

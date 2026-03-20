@@ -1,0 +1,29 @@
+[Unit]
+Description=Phantom-Coin Miner Client
+After=network-online.target phantom-node-status.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=phantom
+Group=phantom
+WorkingDirectory=/opt/phantom-coin
+
+ExecStart=/opt/phantom-coin/bin/phantom-miner \
+  run \
+  --config /etc/phantom-coin/miner.toml
+
+Restart=on-failure
+RestartSec=10s
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=phantom-miner
+
+[Install]
+WantedBy=multi-user.target

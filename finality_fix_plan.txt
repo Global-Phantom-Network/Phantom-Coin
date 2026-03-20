@@ -1,0 +1,212 @@
+Korrigierter Fix-Plan für die Finalitätspipeline
+
+Vorab-Befund
+
+- Code-Inkonsistenz im aktuellen Baum:
+  - crates/phantom-node/src/quic_server.rs und crates/phantom-node/src/tests.rs verwenden FinalizedPayloadMeta.state_root.
+  - Die gelesene Definition in crates/phantom-node/src/main.rs zeigte dieses Feld nicht.
+  - Wenn das kein Lese-/Standproblem ist, ist das selbst ein separater Codezustandsfehler.
+  - Folge: Vor echten Codeänderungen diese Stelle einmal hart verifizieren.
+  - Confidence: high
+
+Phase 1: Produktiven Finalitätsverifier kanonisch machen
+
+Ziel
+- Die produktive Finalitätsprüfung muss exakt die Semantik erzwingen, die gewünscht ist: final nur mit echtem Precommit.
+
+Primäre Datei
+- crates/phantom-node/src/main.rs
+
+Konkrete Änderungen
+- verify_header_finality(...) auf v5-only für Finalität härten.
+- state_root als Pflichtfeld erzwingen.
+- attest_sig als Pflichtfeld erzwingen.
+- Signaturprüfung auf committee_precommit_message(...) umstellen.
+- Vorchecks aus crates/phantom-node/src/finality_pipeline.rs::precheck_finality_header(...) entweder direkt wiederverwenden oder dieselben Invarianten zentral an einer Stelle festziehen.
+
+Wichtige Präzisierung
+- Für AnchorHeaderV2 v5 steckt state_root bereits im vote_target_hash().
+- Der Kernfehler ist also nicht nur „Header hash bindet keinen state root“, sondern:
+  - der produktive Verifier erzwingt nicht hart v5 + state_root
+  - und verwendet nicht den dedizierten precommit-Nachrichtenpfad.
+
+Nicht tun
+- Dashboard hier zuerst umbauen. Das ist nicht der Haupt-Gap.
+
+Confidence
+- high
+
+Phase 2: Produzenten und Konsumenten auf denselben Commit-Begriff ausrichten
+
+Ziel
+- Alle Pfade, die Finality-Headers bauen oder prüfen, müssen denselben Signaturbegriff verwenden.
+
+Betroffene Stellen
+- apps/phantom-dashboard/src-tauri/src/node_service.rs
+- crates/phantom-node/src/http_api.rs
+- crates/phantom-node/src/bin/status_http.rs
+- crates/pc-consensus/src/attestor_pool.rs
+- crates/pc-types/src/lib.rs
+
+Konkrete Änderungen
+- Dashboard nicht neu erfinden:
+  - der Pfad über /consensus/local_precommit_context und committee_precommit_message(...) ist grundsätzlich die richtige Richtung.
+- status_http.rs und alle Nebenkonsumenten gegen denselben Commit-Begriff angleichen.
+- Sicherstellen, dass kein alternativer Builder/Verifier mehr still auf committee_vote_message(...) hängt.
+- crates/pc-consensus/src/attestor_pool.rs bleibt die autoritative Stelle für committee_precommit_message(...).
+
+Wichtige Konsequenz
+- Der Fix ist hier vor allem Verdrahtung und Vereinheitlichung, nicht Neuerfindung der Message-Funktion.
+
+Confidence
+- high
+
+Phase 3: Semantik von „Finalität beobachtet“ vs. „Payload materialisiert“ sauber trennen
+
+Primäre Datei
+- crates/phantom-node/src/quic_server.rs
+
+Ist-Zustand
+- tx_final_cons.send(()) ist aktuell eher ein Wakeup nach beobachteter Finalität.
+- Danach läuft im Apply-Pfad noch echte Vollprüfung und Materialisierung.
+
+Empfohlene Korrektur
+- Option B verbindlich umsetzen:
+  - kein Finalitätssignal vor erfolgreichem Apply
+  - Wakeup-/Queue-Semantik nur noch als apply_candidate behandeln
+  - Finalität erst nach erfolgreicher Materialisierung sichtbar machen
+- Namen, Logs und Metriken daran ausrichten.
+
+Confidence
+- high
+
+Phase 4: Apply-Pfad nicht zu früh vereinfachen
+
+Ziel
+- Nicht Sicherheit wegrefaktorieren, bevor der Finalitätsbeweis wirklich stimmt.
+
+Primäre Datei
+- crates/phantom-node/src/quic_server.rs
+
+Aktuell macht der Apply-Pfad noch echte Wahrheit
+- Payload-Sanity
+- Mint-/Slash-Prüfung
+- Payout-Root-Abgleich
+- Tx-Signaturprüfung
+- Apply
+- post_exec_sr gegen committed_state_root
+- Rollback bei Mismatch
+
+Konkrete Empfehlung
+- Diese Checks vorerst behalten.
+- Erst wenn Phase 1 stabil ist, schrittweise entscheiden:
+  - was in die lokale Precommit-Erzeugung gehört
+  - was als reine Materialisierungs-Invariante im Apply-Pfad bleibt
+
+Zielbild
+- Langfristig:
+  - Precommit = vollständige deterministische Validierung
+  - Apply = Materialisierung plus harte Konsistenzchecks
+- Aber nicht sofort in einem Rutsch.
+
+Confidence
+- high
+
+Phase 5: Echte prevote-/precommit-Trennung als separates Konsens-Upgrade
+
+Ziel
+- Zielpipeline sauber als Zwei-Phasen-Modell abbilden:
+  - Pre-Check -> prevote
+  - Full Validation -> precommit
+  - Finalisierung bei 2/3+ precommit
+
+Wichtige Einordnung
+- Das ist größer als nur main.rs und quic_server.rs.
+- Das betrifft voraussichtlich:
+  - Konsens-/Netzwerknachrichten
+  - Equivocation-Logik
+  - eventuelle Persistenz-/Index-Modelle
+  - Kompatibilität zwischen alten und neuen Nodes
+
+Empfehlung
+- Erst nach Phase 1 bis 4.
+- Sonst vermischt man Finality-Härtung mit einem echten Protokoll-Upgrade.
+
+Confidence
+- med
+
+Konkrete Call-Sites mit Priorität
+
+- Produktiver Verifier
+  - crates/phantom-node/src/main.rs::verify_header_finality(...)
+
+- Header-Precheck / lokaler Precommit-Kontext
+  - crates/phantom-node/src/finality_pipeline.rs
+
+- Finality-Wakeup / Apply / Rollback
+  - crates/phantom-node/src/quic_server.rs
+
+- HTTP-Expose des lokalen Commit-Kontexts
+  - crates/phantom-node/src/http_api.rs
+
+- Equivocation-/Status-Pfad
+  - crates/phantom-node/src/bin/status_http.rs
+
+- Message-Definitionen
+  - crates/pc-consensus/src/attestor_pool.rs
+
+- Header-Hash-/Encoding-Semantik
+  - crates/pc-types/src/lib.rs
+
+- Bestehende Tests
+  - crates/phantom-node/src/tests.rs
+  - weitere Finality-/E2E-Tests im phantom-node-Bereich
+
+Testplan
+
+- Reject legacy finality
+  - Finality-Header < v5 müssen abgelehnt werden.
+
+- Reject missing root
+  - Header ohne state_root müssen abgelehnt werden.
+
+- Reject wrong message basis
+  - Signatur, die unter committee_vote_message(...) gültig wäre, aber nicht unter committee_precommit_message(...), muss scheitern.
+
+- Accept canonical precommit
+  - Gültiger v5-Header mit state_root und committee_precommit_message(...) muss akzeptiert werden.
+
+- Mismatch rollback
+  - post_exec_sr != committed_state_root muss deterministisch rollbacken.
+
+- Mixed-version behavior
+  - Alte/neue Headerpfade explizit testen, statt implizit mitzuschleppen.
+
+- Producer/consumer consistency
+  - Dashboard/HTTP erzeugter Header muss exakt vom produktiven Verifier akzeptiert werden.
+
+Confidence
+- high
+
+Was aus dem alten Plan explizit raus soll
+
+- Dashboard zuerst umbauen
+  - Nein. Das ist nicht der Hauptfehler.
+
+- state_root aktuell als Pre-Apply-State beschreiben
+  - So pauschal nicht mehr korrekt.
+
+- Behaupten, die aktuellen Tests hingen noch überwiegend am alten Vote-Pfad
+  - So nicht belegt.
+
+Empfohlene Reihenfolge
+
+- 1. verify_header_finality(...) härten
+- 2. alle Producer/Consumer auf denselben Commit-Begriff ziehen
+- 3. tx_final_cons.send(()) semantisch sauber einordnen
+- 4. Apply-Pfad erst danach umbauen
+- 5. echtes prevote-/precommit-Protokoll separat einführen
+
+Status
+- Der korrigierte Fix-Plan ist auf den aktuellen Ist-Zustand zugeschnitten.
+- Zusätzlich gibt es einen harten Befund: die Inkonsistenz um FinalizedPayloadMeta.state_root muss vor der Implementierung einmal sauber verifiziert werden.

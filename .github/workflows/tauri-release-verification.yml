@@ -1,0 +1,58 @@
+name: Tauri Release Verification
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/tauri-release-verification.yml'
+      - 'apps/phantom-dashboard/**'
+      - 'scripts/verify_tauri_release_ci.sh'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/tauri-release-verification.yml'
+      - 'apps/phantom-dashboard/**'
+      - 'scripts/verify_tauri_release_ci.sh'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  workflow_dispatch:
+
+jobs:
+  tauri-release:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: apps/phantom-dashboard/package-lock.json
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            apps/phantom-dashboard/src-tauri -> apps/phantom-dashboard/src-tauri/target
+
+      - name: Verify Tauri release build
+        run: |
+          chmod +x scripts/verify_tauri_release_ci.sh
+          scripts/verify_tauri_release_ci.sh
+
+      - name: Upload Tauri release bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tauri-release-bundle
+          path: target/release/bundle
+          if-no-files-found: ignore

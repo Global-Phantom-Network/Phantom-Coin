@@ -1,0 +1,46 @@
+# Phantom-Node example configuration
+# SPDX-License-Identifier: AGPL-3.0-only
+
+[consensus]
+# Committee size (1..=64); overridden by --genesis if provided
+k = 21
+
+[consensus.rotation]
+# Epoch-Länge in Ankern (>=1). 0 oder nicht gesetzt -> Default 10000
+epoch_len = 10000
+# Cooldown in Ankern (Mindestabstand zur letzten Auswahl)
+cooldown_anchors = 10000
+# Mindest-Attendance in Prozent (0..=100)
+min_attendance_pct = 50
+
+[consensus.da_gating]
+# Finalisierung erst nach lokaler Payload: Timeout für einzelne Warteversuche (Sekunden)
+payload_wait_timeout_secs = 10
+# Exponentielles Backoff: initiale Wartezeit zwischen Retries (ms)
+retry_initial_delay_ms = 500
+# Obergrenze der Wartezeit zwischen Retries (ms)
+retry_max_delay_ms = 5000
+# Maximale Anzahl an Retries, bevor aufgegeben wird
+retry_max_retries = 5
+# Jitter-Prozentsatz (0..=100) für Backoff-Schlafdauer
+retry_jitter_pct = 10
+
+[node.cache]
+# header_cap: LRU entry count; 0 disables
+# payload_mb: byte-budget in MB; 0 disables
+header_cap = 10000
+payload_mb = 200
+
+[node.rate]
+hdr_capacity = 200
+hdr_refill_per_sec = 200
+inv_capacity = 300
+inv_refill_per_sec = 300
+req_capacity = 300
+req_refill_per_sec = 300
+resp_capacity = 300
+resp_refill_per_sec = 300
+bytes_capacity = 4194304
+bytes_refill_per_sec = 2097152
+per_peer = true
+peer_ttl_secs = 600

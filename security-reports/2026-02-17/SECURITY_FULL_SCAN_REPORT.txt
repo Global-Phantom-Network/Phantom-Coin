@@ -1,0 +1,199 @@
+================================================================================
+  PHANTOM-COIN - FULL SECURITY SCAN REPORT
+  Datum: 2026-02-17
+  Modus: Repo-weite Vollpruefung (Source + Runtime-Daten)
+================================================================================
+
+LEGENDE:
+  P0 = Kritisch (Key-Compromise / direkt ausnutzbar)
+  P1 = Hoch     (Supply-Chain / harte Betriebsrisiken)
+  P2 = Mittel   (Hardening / Betriebssicherheit)
+  [ ] = Offen
+
+SCAN-SCOPE (SYSTEMATISCH):
+  - Source/Config/Build: apps, crates, ci, configs, deploy, docs, scripts, systemd, test_vectors,
+    sowie Root-Dateien (Cargo.toml, Cargo.lock, README.md, etc.)
+  - Runtime-Daten zusaetzlich: pc-data, pc-data-validator,
+    apps/phantom-dashboard/src-tauri/pc-data
+
+WICHTIGER KONTEXT:
+  - Im aktuellen Workspace fehlt .git-Metadaten im Verzeichnisbaum.
+    -> Kein History-Scan ueber Commits moeglich (nur Working-Tree-Scan).
+
+AUSGEFUEHRTE CHECKS:
+  1) Semgrep (custom): semgrep.yml -> 0 Findings
+  2) Semgrep (community): p/rust + p/javascript + p/typescript -> 25 Findings
+  3) Gitleaks (Source-Pfade) -> 1 Finding
+  4) Gitleaks (Runtime-Pfade) -> 2 Findings
+  5) cargo audit (JSON) -> 0 direkte CVEs, aber 17 Warnungen (unmaintained/unsound)
+  6) cargo deny -> FAILED (advisories/licenses/unlicensed)
+  7) npm audit (apps/phantom-dashboard) -> 2 moderate Findings
+  8) clippy Security-Lints (workspace) -> FAILED (u.a. phantom-tui test-Lints), 731 Warnings
+  9) Grep-basierte Hardening-Checks:
+     - unsafe blocks: 0 Treffer im Source-Scope
+     - shell -c usage in Produktivcode: keine Treffer
+
+================================================================================
+  FINDINGS
+================================================================================
+
+----------------------------------------------------------------------
+[ ] S001 - PRIVATE KEY IM QUELLBAUM (HARDCODED/EXPORTED)
+----------------------------------------------------------------------
+  Severity:   P0
+  Modul:      phantom-dashboard (Tauri app data im Source-Pfad)
+  Datei:      apps/phantom-dashboard/src-tauri/pc-data/server.key:1
+  Evidence:   gitleaks Rule 'private-key'
+
+  Risiko:
+    Ein privater TLS-Schluessel liegt direkt im Projektbaum. Falls dieser Pfad
+    committed/gepackt/verteilt wird, kann ein Angreifer Identitaet/TLS-Endpunkte
+    imitieren.
+
+  Fix:
+    - Datei sofort aus Source-Tree entfernen.
+    - Schluessel nur zur Laufzeit in user/app-data erzeugen.
+    - .gitignore-Regeln fuer pc-data/server.key und gesamte Runtime-Daten erzwingen.
+    - Falls jemals verteilt/geleakt: Schluessel rotieren.
+
+----------------------------------------------------------------------
+[ ] S002 - SENSITIVE RUNTIME-STATE IM APP-SOURCE-PFAD
+----------------------------------------------------------------------
+  Severity:   P1
+  Modul:      phantom-dashboard
+  Pfad:       apps/phantom-dashboard/src-tauri/pc-data/
+  Beispiele:  validator_bls.ks.toml, server.key, payloads/, mempool/, utxo/
+
+  Risiko:
+    Runtime-Zustand und sensible Daten liegen unter src-tauri/ und koennen
+    versehentlich ins Artefakt/Repo gelangen (State-Leak, Datenkontamination,
+    verteilte lokale Geheimnisse).
+
+  Fix:
+    - Runtime-Daten strikt in OS AppData (nicht im Repo-Pfad) halten.
+    - Start-Hardening: verweigere Start, wenn store_dir unter src-tauri liegt.
+    - Bereinige vorhandene Daten aus dem Quellbaum.
+
+----------------------------------------------------------------------
+[ ] S003 - SUPPLY-CHAIN: UNMAINTAINED GTK3 STACK (TAURI V1 CHAIN)
+----------------------------------------------------------------------
+  Severity:   P1
+  Modul:      phantom-dashboard transitive deps
+  Evidence:   cargo-deny errors (RUSTSEC-2024-041x Serie)
+  Betroffen:  atk/gtk/gdk/*-sys, gtk3-macros, webkit2gtk chain
+
+  Risiko:
+    Unmaintained GUI-Abhaengigkeiten bekommen keine Security-Fixes mehr.
+
+  Fix:
+    - Migrationspfad auf gepflegten Stack (z.B. Tauri v2 / GTK4-Route) planen.
+    - Bis Migration: harte Isolation + minimale Permissions + dokumentierte Risk-Acceptance.
+
+----------------------------------------------------------------------
+[ ] S004 - SUPPLY-CHAIN: WEITERE UNMAINTAINED/UNSOUND CRATES
+----------------------------------------------------------------------
+  Severity:   P1
+  Evidence:   cargo-audit warnings + cargo-deny errors
+  IDs:        RUSTSEC-2025-0134 (rustls-pemfile), RUSTSEC-2024-0370 (proc-macro-error),
+              RUSTSEC-2024-0429 (glib unsound), RUSTSEC-2026-0002 (lru unsound),
+              zusaetzlich fxhash/instant/paste unmaintained.
+
+  Risiko:
+    Erhoehte Angriffs- und Ausfallflaeche durch nicht gepflegte Basiskomponenten.
+
+  Fix:
+    - Upgrade/Replacement-Matrix erstellen.
+    - Kritische Pakete priorisiert ersetzen oder version-gated isolieren.
+
+----------------------------------------------------------------------
+[ ] S005 - NPM AUDIT: MODERATE VITE/ESBUILD ISSUE
+----------------------------------------------------------------------
+  Severity:   P2
+  Modul:      apps/phantom-dashboard
+  Evidence:   npm audit JSON
+  Advisory:   GHSA-67mh-4wv8-2f99 (esbuild via vite)
+
+  Risiko:
+    Dev-Server Request-Exposure in bestimmten Szenarien.
+
+  Fix:
+    - Upgrade auf gefixte Vite/Esbuild-Kette (npm audit verweist auf vite 7.3.1).
+    - Dev-Server nicht unnoetig ins Netz exponieren.
+
+----------------------------------------------------------------------
+[ ] S006 - BRIDGE-KOMMUNIKATION UEBER HTTP (LOOPBACK)
+----------------------------------------------------------------------
+  Severity:   P2
+  Modul:      bitbox-api-rs webhid bridge
+  Datei:      crates/bitbox-api-rs/webhid.js:163
+
+  Risiko:
+    Kommunikation zu 127.0.0.1:8178 erfolgt unverschluesselt.
+    (Loopback reduziert Risiko, aber lokaler Prozess-Hijack bleibt moeglich.)
+
+  Fix:
+    - Lokales AuthN-Token + strikte Origin-Allowlist erzwingen.
+    - Optional auf TLS/UDS/Named Pipe umstellen.
+
+----------------------------------------------------------------------
+[ ] S007 - CSP ENTHAELT DEV-SOCKETS UND UNSAFE-INLINE STYLE
+----------------------------------------------------------------------
+  Severity:   P2
+  Modul:      phantom-dashboard
+  Datei:      apps/phantom-dashboard/src-tauri/tauri.conf.json:26
+
+  Risiko:
+    CSP ist besser als Default, aber enthaelt dev-orientierte connect-src Eintraege
+    (ws://127.0.0.1:5173 etc.) und style-src 'unsafe-inline'.
+
+  Fix:
+    - Build-abhängige CSP trennen (dev vs prod).
+    - Produktions-CSP ohne dev websocket Quellen ausliefern.
+
+----------------------------------------------------------------------
+[ ] S008 - SECURITY-LINT-GATE INSTABIL (PHANTOM-TUI TESTS)
+----------------------------------------------------------------------
+  Severity:   P2
+  Modul:      phantom-tui
+  Evidence:   clippy-security Lauf bricht mit expect/unwrap denies in Tests
+
+  Risiko:
+    Security-Gate ist nicht stabil gruen; echte neue Probleme koennen in Rauschen
+    untergehen.
+
+  Fix:
+    - Teststellen auf Result-basierte Assertions umstellen.
+    - Security-Lints fuer Testcode gezielt steuern statt globalem Gate-Block.
+
+================================================================================
+  POSITIVE CHECKS (BEREITS GUT)
+================================================================================
+
+  - Keine unsafe-Blocks im gescannten Source-Scope gefunden.
+  - Keine shell -c / bash -c Ausfuehrung im Produktivcode gefunden.
+  - Dashboard Tauri Backend validiert loopback-only HTTP-URLs fuer bridge calls.
+  - Endpoint-Allowlist fuer http_get vorhanden (/status, /metrics, /consensus/validators).
+  - status_auth_token wird unter Unix mit 0600 geschrieben.
+
+================================================================================
+  EMPFOHLENE SOFORTMASSNAHMEN (PRIO)
+================================================================================
+
+  1) S001/S002 sofort: sensitive Dateien aus Source-Pfaden entfernen + rotieren.
+  2) S003/S004: Supply-Chain-Plan mit Migrations-Roadmap und Risiko-Akzeptanz dokumentieren.
+  3) S005: vite/esbuild updaten.
+  4) S007: Produktions-CSP haerten.
+  5) S008: Security-Lint-Pipeline stabilisieren.
+
+================================================================================
+  ARTEFAKTE (DETAILS)
+================================================================================
+
+  security-reports/2026-02-17/semgrep.json
+  security-reports/2026-02-17/semgrep-community.json
+  security-reports/2026-02-17/gitleaks-source.json
+  security-reports/2026-02-17/gitleaks-runtime.json
+  security-reports/2026-02-17/cargo-audit.json
+  security-reports/2026-02-17/cargo-deny.txt
+  security-reports/2026-02-17/npm-audit-dashboard.json
+  security-reports/2026-02-17/clippy-security.txt

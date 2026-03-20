@@ -1,0 +1,22 @@
+[package]
+name = "phantom-miner"
+version = "0.1.1"
+edition = "2021"
+license = "AGPL-3.0-only"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+tokio = { version = "1.39", features = ["rt-multi-thread","macros","time","net","signal"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2", "json"] }
+hyper = { version = "0.14", features = ["server","http1","tcp"] }
+sysinfo = { version = "0.30", default-features = false }
+pc-consensus = { path = "../pc-consensus" }
+pc-types = { path = "../pc-types" }
+hex = "0.4"
+num_cpus = "1.16"

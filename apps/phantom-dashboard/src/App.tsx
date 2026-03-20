@@ -1,0 +1,6994 @@
+import {
+  isTauri,
+  httpGet as bridgeHttpGet,
+  httpGetFast as bridgeHttpGetFast,
+  listListenPorts as bridgeListListenPorts,
+  appQuit as bridgeAppQuit,
+  walletGenerateMnemonic as bridgeWalletGenerateMnemonic,
+  walletCreate as bridgeWalletCreate,
+  walletCreateWatchOnly as bridgeWalletCreateWatchOnly,
+  walletStatus as bridgeWalletStatus,
+  walletUnlock as bridgeWalletUnlock,
+  walletLock as bridgeWalletLock,
+  walletSelectAddr as bridgeWalletSelectAddr,
+  walletSend as bridgeWalletSend,
+  walletBackupToDir as bridgeWalletBackupToDir,
+  walletRestoreFromDir as bridgeWalletRestoreFromDir,
+  walletHistoryCsvAppend as bridgeWalletHistoryCsvAppend,
+  walletHistoryCsvOpenFolder as bridgeWalletHistoryCsvOpenFolder,
+  walletHistoryCsvRange as bridgeWalletHistoryCsvRange,
+  bitboxBridgeStatus as bridgeBitboxBridgeStatus,
+  bitboxHwiEnumerate as bridgeBitboxHwiEnumerate,
+  bitboxHwiGetXpub as bridgeBitboxHwiGetXpub,
+  validatorKeygenBls as bridgeValidatorKeygenBls,
+  validatorBlsInfo as bridgeValidatorBlsInfo,
+  validatorStakeBond as bridgeValidatorStakeBond,
+  validatorStakeUnbond as bridgeValidatorStakeUnbond,
+  validatorRegister as bridgeValidatorRegister,
+  bootstrapPeersLoad as bridgeBootstrapPeersLoad,
+  bootstrapPeersSave as bridgeBootstrapPeersSave,
+  canonicalGenesisResetPrepare as bridgeCanonicalGenesisResetPrepare,
+  canonicalGenesisResetCommit as bridgeCanonicalGenesisResetCommit,
+  nodeStart as bridgeNodeStart,
+  nodeStop as bridgeNodeStop,
+  nodeStatus as bridgeNodeStatus,
+  nodeLogs as bridgeNodeLogs,
+  nodeBackupStore as bridgeNodeBackupStore,
+  nodeWalletUtxosByLock as bridgeNodeWalletUtxosByLock,
+  nodeWalletHistory as bridgeNodeWalletHistory,
+  nodeConsensusValidators as bridgeNodeConsensusValidators,
+} from './tauri-bridge';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
+import uPlot from 'uplot';
+
+import { getHistogramBuckets, getScalar, parsePrometheus } from './prometheus';
+import { I18nProvider, useI18n, fetchTexts, FALLBACK_TEXTS, loadLocale, saveLocale, LOCALE_NAMES } from './i18n';
+import type { Locale } from './i18n';
+
+type StatusInfo = { ok: boolean; service?: string; ts?: number };
+
+type BootstrapPeer = {
+  addr: string;
+  certFile: string;
+};
+
+type AppConfig = {
+  statusUrl: string;
+  metricsUrlPrimary: string;
+  metricsUrlFallback: string;
+  bearerToken: string;
+
+  // BitBox02 settings (HWI).
+  bitboxTransport: string;
+  bitboxBridgeUrl: string;
+
+  // Node settings (used for launch/config UX; not required for status/metrics polling).
+  nodeLocalAddr: string;
+  nodeStoreDir: string;
+  nodeP2PListenAddr: string;
+  nodeP2PPublicConfirm: boolean;
+  nodeBootstrapPeers: BootstrapPeer[];
+  nodeBackupTarget: string;
+  nodeTxProposer: boolean;
+  nodePowMiner: boolean;
+  nodeValidatorId: string;
+  nodeBlsPk: string;
+  nodeMintAmount: string;
+  nodeMintLock: string;
+  nodeOverrideValidatorControl: boolean;
+};
+
+type WalletStatus = {
+  exists: boolean;
+  wallet_name?: string | null;
+  wallet_kind?: 'hot' | 'bitbox_watch_only' | null;
+  watch_only?: boolean;
+  hrp?: string | null;
+  address?: string | null;
+  lock_hex?: string | null;
+};
+
+type WalletAddrView = {
+  addr: string;
+  hrp: string;
+  change: number;
+  index: number;
+  xpub_derivation: string;
+  fingerprint?: string | null;
+  label?: string | null;
+  lock_hex: string;
+};
+
+type WalletUnlockResp = {
+  ok: boolean;
+  wallet_name: string;
+  wallet_kind: 'hot' | 'bitbox_watch_only';
+  watch_only: boolean;
+  addrs: WalletAddrView[];
+  selected_addr?: string | null;
+  selected_lock_hex?: string | null;
+};
+
+type SignerCmdResp = {
+  ok: boolean;
+  stdout: string;
+  stderr: string;
+};
+
+type ValidatorBlsInfoResp = {
+  ok: boolean;
+  keystore_path: string;
+  keystore_location: string;
+  bls_pk: string;
+  bls_pop: string;
+};
+
+type ListenPort = {
+  port: number;
+  process: string | null;
+};
+
+type ManagedNodeStartArgs = {
+  status_addr: string;
+  status_http_addr?: string | null;
+  mint_rpc_addr?: string | null;
+  p2p_listen_addr: string;
+  store_dir: string;
+  metrics_addr?: string | null;
+  bearer_token?: string | null;
+  bootstrap_peers?: { addr: string; cert_file: string }[];
+  unsafe_confirm_p2p_public?: boolean;
+  tx_proposer?: boolean;
+  pow_miner?: boolean;
+  validator_id?: string | null;
+  bls_pk?: string | null;
+  mint_amount?: number | null;
+  mint_lock?: string | null;
+  override_validator_control?: boolean;
+  validator_passphrase?: string | null;
+  use_passphrase_role?: boolean;
+};
+
+type ManagedNodeStatus = {
+  running: boolean;
+  p2p_running: boolean;
+  status_running: boolean;
+  status_http_running: boolean;
+  mint_rpc_running: boolean;
+  tx_proposer_enabled: boolean;
+  pow_miner_enabled: boolean;
+  mint_lock_hex?: string | null;
+  started_at_ts?: number | null;
+  p2p_listen_addr?: string | null;
+  status_addr?: string | null;
+  status_http_addr?: string | null;
+  mint_rpc_addr?: string | null;
+  store_dir?: string | null;
+  metrics_addr?: string | null;
+  last_error?: string | null;
+};
+
+type DashboardSmokeHttpRequest = {
+  url: string;
+  bearer_token?: string | null;
+  expect_body_includes?: string | null;
+};
+
+type ValidatorInfo = {
+  validator_id: string;
+  stake_lock: string;
+  sequence: number;
+  operator_id: string;
+  bls_pk: string;
+  bls_pop_valid: boolean;
+  stake: number;
+  utxo_count: number;
+  min_stake: number;
+  meets_min_stake: boolean;
+};
+
+type ValidatorsResponse = {
+  ok: boolean;
+  n: number;
+  validators: ValidatorInfo[];
+  stake_ts: number;
+  ts: number;
+};
+
+type MintStatusInfo = {
+  last_mint_id: string;
+  mint_height: number;
+  total_supply: string;
+  remaining_supply: string;
+  hard_cap: string;
+  next_reward: number;
+  can_mint: boolean;
+  target_bits: number;
+  phase?: 'searching' | 'collecting';
+  round_id?: string;
+  last_final_emission_bucket?: number | null;
+  hit_bucket?: number | null;
+  bits_used?: number | null;
+  collect_deadline_bucket?: number | null;
+  finalize_deadline_bucket?: number | null;
+};
+
+type MinerMetrics = {
+  uptimeSec: number | null;
+  hashesTotal: number | null;
+  hashrate: number | null;
+  threads: number | null;
+  activeLocalSlots: number | null;
+  activeWorkSlots: number | null;
+  templatesTotal: number | null;
+  templateErrorsTotal: number | null;
+  submitAcceptedTotal: number | null;
+  submitRejectedTotal: number | null;
+  submitStaleTotal: number | null;
+  submitErrorsTotal: number | null;
+  candidateQueuedTotal: number | null;
+  candidateReplacedTotal: number | null;
+  candidateSkippedNotBetterTotal: number | null;
+  candidateScopeResetsTotal: number | null;
+  lastTemplateEpoch: number | null;
+  lastSubmitOkEpoch: number | null;
+  lastTemplateFetchMs: number | null;
+  lastSubmitMs: number | null;
+  memoryMb: number | null;
+  cpuPct: number | null;
+  rewardTo: string | null;
+  lastError: string | null;
+};
+
+function initMinerMetrics(): MinerMetrics {
+  return {
+    uptimeSec: null, hashesTotal: null, hashrate: null, threads: null,
+    activeLocalSlots: null, activeWorkSlots: null,
+    templatesTotal: null, templateErrorsTotal: null,
+    submitAcceptedTotal: null, submitRejectedTotal: null, submitStaleTotal: null, submitErrorsTotal: null,
+    candidateQueuedTotal: null, candidateReplacedTotal: null, candidateSkippedNotBetterTotal: null, candidateScopeResetsTotal: null,
+    lastTemplateEpoch: null, lastSubmitOkEpoch: null, lastTemplateFetchMs: null, lastSubmitMs: null,
+    memoryMb: null, cpuPct: null, rewardTo: null, lastError: null,
+  };
+}
+
+type DashboardState = {
+  online: boolean;
+  statusTs: number | null;
+  lastError: string | null;
+  logs: string[];
+
+  seriesT: number[];
+  seriesInboundRate: number[];
+  seriesOutboundRate: number[];
+
+  lastInboundTotal: number | null;
+  lastOutboundTotal: number | null;
+
+  votesSentTotal: number | null;
+  votesAcceptedTotal: number | null;
+  votesRejectedTotal: number | null;
+  lastVotesSentTotal: number | null;
+  lastVotesAcceptedTotal: number | null;
+  lastVotesRejectedTotal: number | null;
+  votesSentRate: number | null;
+  votesAcceptedRate: number | null;
+  votesRejectedRate: number | null;
+
+  rpcBroadcastTotal: number | null;
+  rpcAcceptedTotal: number | null;
+  rpcDupTotal: number | null;
+  rpcErrorsTotal: number | null;
+
+  finalityAvgSec: number | null;
+  finalityEventsTotal: number | null;
+  finalityMintEventsTotal: number | null;
+  tps: number | null;
+  prevFinalizedTxTotal: number | null;
+
+  verifyAvgSec: number | null;
+  verifyCount: number | null;
+  consensusErrorsTotal: number | null;
+  verifyBucketOrder: string[];
+  verifyPrevCum: Map<string, number> | null;
+  heatmapColumns: number[][];
+
+  validators: ValidatorInfo[];
+  validatorsLoading: boolean;
+  validatorsError: string | null;
+  validatorsTs: number | null;
+
+  // P2P Netzwerk
+  p2pPeersTotal: number | null;
+  p2pPeersKnown: number | null;
+  p2pPeersBanned: number | null;
+  p2pPeersMiner: number | null;
+  p2pPeersValidator: number | null;
+  p2pInboundTotal: number | null;
+  p2pOutboundTotal: number | null;
+  p2pInboundBytes: number | null;
+  p2pOutboundBytes: number | null;
+  p2pOutboxDepth: number | null;
+
+  // Mempool & Proposer
+  mempoolSize: number | null;
+  mempoolAccepted: number | null;
+  mempoolRejected: number | null;
+  mempoolDuplicate: number | null;
+  mempoolTtlEvict: number | null;
+  mempoolCapEvict: number | null;
+  mempoolInvalidated: number | null;
+  proposerBuiltTotal: number | null;
+  proposerLastSize: number | null;
+  proposerPending: number | null;
+
+  minerMetrics: MinerMetrics;
+  mintStatus: MintStatusInfo | null;
+  minerHashrateSeries: number[];
+};
+
+function clamp(x: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, x));
+}
+
+function formatInt(n: number | null): string {
+  if (n === null || !Number.isFinite(n)) {
+    return '—';
+  }
+  return `${Math.round(n)}`;
+}
+
+function formatCoins(units: number): string {
+  const pc = units / 100_000_000;
+  if (pc === 0) return '0 PC';
+  if (pc >= 1) return `${pc.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 8 })} PC`;
+  return `${pc.toFixed(8)} PC`;
+}
+
+function formatSeconds(n: number | null): string {
+  if (n === null || !Number.isFinite(n)) {
+    return '—';
+  }
+  if (n < 1) {
+    return `${Math.round(n * 1000)} ms`;
+  }
+  return `${n.toFixed(2)} s`;
+}
+
+function formatByteRate(n: number | null): string {
+  if (n === null || !Number.isFinite(n)) {
+    return '—';
+  }
+  return `${formatBytes(n)}/s`;
+}
+
+function hostPortFromUrl(url: string): string | null {
+  try {
+    const u = new URL(url);
+    const host = u.hostname;
+    if (!host) return null;
+    const port = u.port || (u.protocol === 'https:' ? '443' : '80');
+    return `${host}:${port}`;
+  } catch {
+    return null;
+  }
+}
+
+function isLoopbackHostname(host: string): boolean {
+  const h = host.trim().toLowerCase();
+  return h === 'localhost' || h === '127.0.0.1' || h === '::1';
+}
+
+function randomTokenHex(nbytes = 32): string {
+  const b = new Uint8Array(nbytes);
+  crypto.getRandomValues(b);
+  return Array.from(b)
+    .map((x) => x.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+function stripHexPrefix(s: string): string {
+  return s.trim().replace(/^0x/i, '');
+}
+
+function isHexString(s: string, len: number): boolean {
+  const v = stripHexPrefix(s);
+  if (v.length !== len) return false;
+  return /^[0-9a-f]+$/i.test(v);
+}
+
+function normalizeHex(s: string): string {
+  return stripHexPrefix(s).toLowerCase();
+}
+
+const DASHBOARD_CFG_KEY = 'phantom.dashboard.cfg';
+const DASHBOARD_TOKEN_SESSION_KEY = 'phantom.dashboard.token';
+
+function loadSessionBearerToken(fallback: string): string {
+  try {
+    const raw = sessionStorage.getItem(DASHBOARD_TOKEN_SESSION_KEY);
+    if (typeof raw === 'string' && raw.trim()) {
+      return raw.trim();
+    }
+  } catch {
+    // ignore
+  }
+  return fallback.trim();
+}
+
+function saveSessionBearerToken(token: string): void {
+  try {
+    const t = token.trim();
+    if (!t) {
+      sessionStorage.removeItem(DASHBOARD_TOKEN_SESSION_KEY);
+      return;
+    }
+    sessionStorage.setItem(DASHBOARD_TOKEN_SESSION_KEY, t);
+  } catch {
+    // ignore
+  }
+}
+
+function loadAppConfig(defaults: AppConfig): AppConfig {
+  try {
+    const raw = localStorage.getItem(DASHBOARD_CFG_KEY);
+    if (!raw) {
+      return {
+        ...defaults,
+        bearerToken: loadSessionBearerToken(defaults.bearerToken),
+      };
+    }
+    const obj = JSON.parse(raw) as Partial<AppConfig>;
+    const legacyToken = typeof obj.bearerToken === 'string' ? obj.bearerToken.trim() : '';
+    const sessionToken = loadSessionBearerToken(legacyToken || defaults.bearerToken);
+    saveSessionBearerToken(sessionToken);
+    const peersRaw = Array.isArray((obj as any).nodeBootstrapPeers) ? ((obj as any).nodeBootstrapPeers as unknown[]) : [];
+    const peers: BootstrapPeer[] = peersRaw
+      .map((p) => {
+        const addr = typeof (p as any)?.addr === 'string' ? String((p as any).addr).trim() : '';
+        const certFile = typeof (p as any)?.certFile === 'string' ? String((p as any).certFile).trim() : '';
+        return { addr, certFile };
+      })
+      .filter((p) => p.addr || p.certFile);
+    return {
+      statusUrl: typeof obj.statusUrl === 'string' && obj.statusUrl.trim() ? obj.statusUrl.trim() : defaults.statusUrl,
+      metricsUrlPrimary:
+        typeof obj.metricsUrlPrimary === 'string' && obj.metricsUrlPrimary.trim() ? obj.metricsUrlPrimary.trim() : defaults.metricsUrlPrimary,
+      metricsUrlFallback:
+        typeof obj.metricsUrlFallback === 'string' && obj.metricsUrlFallback.trim() ? obj.metricsUrlFallback.trim() : defaults.metricsUrlFallback,
+      bearerToken: sessionToken,
+
+      bitboxTransport:
+        typeof (obj as any).bitboxTransport === 'string' && String((obj as any).bitboxTransport).trim()
+          ? String((obj as any).bitboxTransport).trim()
+          : defaults.bitboxTransport,
+      bitboxBridgeUrl:
+        typeof (obj as any).bitboxBridgeUrl === 'string' && String((obj as any).bitboxBridgeUrl).trim()
+          ? String((obj as any).bitboxBridgeUrl).trim()
+          : defaults.bitboxBridgeUrl,
+
+      nodeLocalAddr:
+        typeof (obj as any).nodeLocalAddr === 'string' && String((obj as any).nodeLocalAddr).trim()
+          ? String((obj as any).nodeLocalAddr).trim()
+          : defaults.nodeLocalAddr,
+      nodeStoreDir:
+        typeof (obj as any).nodeStoreDir === 'string' && String((obj as any).nodeStoreDir).trim()
+          ? String((obj as any).nodeStoreDir).trim()
+          : defaults.nodeStoreDir,
+      nodeP2PListenAddr:
+        typeof (obj as any).nodeP2PListenAddr === 'string' && String((obj as any).nodeP2PListenAddr).trim()
+          ? String((obj as any).nodeP2PListenAddr).trim()
+          : defaults.nodeP2PListenAddr,
+      nodeP2PPublicConfirm:
+        typeof (obj as any).nodeP2PPublicConfirm === 'boolean'
+          ? Boolean((obj as any).nodeP2PPublicConfirm)
+          : defaults.nodeP2PPublicConfirm,
+      nodeBootstrapPeers: peers.length > 0 ? peers : defaults.nodeBootstrapPeers,
+      nodeBackupTarget:
+        typeof (obj as any).nodeBackupTarget === 'string' ? String((obj as any).nodeBackupTarget).trim() : defaults.nodeBackupTarget,
+      nodeTxProposer:
+        typeof (obj as any).nodeTxProposer === 'boolean'
+          ? Boolean((obj as any).nodeTxProposer)
+          : defaults.nodeTxProposer,
+      nodePowMiner:
+        typeof (obj as any).nodePowMiner === 'boolean'
+          ? Boolean((obj as any).nodePowMiner)
+          : defaults.nodePowMiner,
+      nodeValidatorId:
+        typeof (obj as any).nodeValidatorId === 'string' ? String((obj as any).nodeValidatorId).trim() : defaults.nodeValidatorId,
+      nodeBlsPk:
+        typeof (obj as any).nodeBlsPk === 'string' ? String((obj as any).nodeBlsPk).trim() : defaults.nodeBlsPk,
+      nodeMintAmount:
+        typeof (obj as any).nodeMintAmount === 'string' ? String((obj as any).nodeMintAmount).trim() : defaults.nodeMintAmount,
+      nodeMintLock:
+        typeof (obj as any).nodeMintLock === 'string' ? String((obj as any).nodeMintLock).trim() : defaults.nodeMintLock,
+      nodeOverrideValidatorControl:
+        typeof (obj as any).nodeOverrideValidatorControl === 'boolean'
+          ? Boolean((obj as any).nodeOverrideValidatorControl)
+          : defaults.nodeOverrideValidatorControl,
+    };
+  } catch {
+    return {
+      ...defaults,
+      bearerToken: loadSessionBearerToken(defaults.bearerToken),
+    };
+  }
+}
+
+function saveAppConfig(cfg: AppConfig): void {
+  saveSessionBearerToken(cfg.bearerToken);
+  try {
+    const safeCfg = {
+      ...cfg,
+      // Security: bearer token must not persist in localStorage.
+      bearerToken: '',
+    };
+    localStorage.setItem(DASHBOARD_CFG_KEY, JSON.stringify(safeCfg));
+  } catch {
+    // ignore
+  }
+}
+
+function nowSec(): number {
+  return Math.floor(Date.now() / 1000);
+}
+
+function colorLerp(a: string, b: string, t: number): string {
+  const ar = Number.parseInt(a.slice(1, 3), 16);
+  const ag = Number.parseInt(a.slice(3, 5), 16);
+  const ab = Number.parseInt(a.slice(5, 7), 16);
+  const br = Number.parseInt(b.slice(1, 3), 16);
+  const bg = Number.parseInt(b.slice(3, 5), 16);
+  const bb = Number.parseInt(b.slice(5, 7), 16);
+  const rr = Math.round(ar + (br - ar) * t);
+  const rg = Math.round(ag + (bg - ag) * t);
+  const rb = Math.round(ab + (bb - ab) * t);
+  return `#${rr.toString(16).padStart(2, '0')}${rg.toString(16).padStart(2, '0')}${rb
+    .toString(16)
+    .padStart(2, '0')}`;
+}
+
+const HEAT_STOPS: [number, number, number][] = [
+  [0x1f, 0x60, 0xc4],
+  [0x33, 0x84, 0xd6],
+  [0x56, 0xa6, 0x4b],
+  [0xe0, 0xb4, 0x00],
+  [0xff, 0x98, 0x30],
+  [0xe0, 0x2f, 0x44],
+];
+
+function heatColor(v: number, max: number, row: number, totalRows: number): string {
+  if (max <= 0 || v <= 0) {
+    return '#131619';
+  }
+  const rPos = totalRows <= 1 ? 0 : row / (totalRows - 1);
+  const gPos = rPos * (HEAT_STOPS.length - 1);
+  const lo = Math.floor(gPos);
+  const hi = Math.min(lo + 1, HEAT_STOPS.length - 1);
+  const f = gPos - lo;
+  const cr = Math.round(HEAT_STOPS[lo][0] + (HEAT_STOPS[hi][0] - HEAT_STOPS[lo][0]) * f);
+  const cg = Math.round(HEAT_STOPS[lo][1] + (HEAT_STOPS[hi][1] - HEAT_STOPS[lo][1]) * f);
+  const cb = Math.round(HEAT_STOPS[lo][2] + (HEAT_STOPS[hi][2] - HEAT_STOPS[lo][2]) * f);
+  const t = Math.pow(clamp(v / max, 0.08, 1), 0.82);
+  const bgR = 0x13, bgG = 0x16, bgB = 0x19;
+  const r = Math.round(bgR + (cr - bgR) * t);
+  const g = Math.round(bgG + (cg - bgG) * t);
+  const b = Math.round(bgB + (cb - bgB) * t);
+  return `rgb(${r},${g},${b})`;
+}
+
+type HeatmapLayout = {
+  rows: number;
+  totalCols: number;
+  drawCols: number[][];
+  startCol: number;
+  x0: number;
+  y0: number;
+  cellW: number;
+  cellH: number;
+  rowGap: number;
+  maxV: number;
+  legendX0: number;
+  legendY: number;
+  legendWidth: number;
+  legendHeight: number;
+};
+
+function computeHeatmapLayout(w: number, h: number, rowLabels: string[], columns: number[][]): HeatmapLayout | null {
+  const rows = rowLabels.length;
+  const totalCols = columns.length;
+  if (rows === 0 || totalCols === 0) {
+    return null;
+  }
+
+  const pad = 8;
+  const labelW = 56;
+  const legendH = 22;
+  const cellW = 14;
+  const cellH = Math.round(cellW * 0.8);
+  const rowGap = 4;
+  const gridW = Math.max(1, w - pad * 2 - labelW);
+  const visibleCols = Math.max(1, Math.floor(gridW / cellW));
+  const startCol = Math.max(0, totalCols - visibleCols);
+  const drawCols = columns.slice(startCol);
+
+  let maxV = 0;
+  for (const col of drawCols) {
+    for (const v of col) {
+      if (v > maxV) {
+        maxV = v;
+      }
+    }
+  }
+
+  return {
+    rows,
+    totalCols,
+    drawCols,
+    startCol,
+    x0: pad + labelW,
+    y0: pad,
+    cellW,
+    cellH,
+    rowGap,
+    maxV,
+    legendX0: pad + labelW,
+    legendY: h - legendH + 4,
+    legendWidth: 28 * (7 + 1) - 1,
+    legendHeight: 3,
+  };
+}
+
+const GRAFANA_LINE_WIDTH = 1;
+const GRAFANA_GAUGE_BAR_WIDTH_FACTOR = 0.5;
+const GRAFANA_GAUGE_THRESHOLD_MARKERS = [0.33, 0.66] as const;
+
+function formatChartTime(ts: number | null): string {
+  if (ts === null || !Number.isFinite(ts)) {
+    return '—';
+  }
+  return new Date(ts * 1000).toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+}
+
+function renderGauge(canvas: HTMLCanvasElement, value: number | null, min: number, max: number, label?: string, formatFn?: (v: number) => string): void {
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth;
+  const h = canvas.clientHeight;
+  canvas.width = Math.max(1, Math.round(w * dpr));
+  canvas.height = Math.max(1, Math.round(h * dpr));
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    return;
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+
+  const cx = w / 2;
+  const cy = h * 0.52;
+  const r = Math.min(w, h) * 0.38;
+  const thickness = Math.max(5, Math.round(r * (0.06 + 0.04 * GRAFANA_GAUGE_BAR_WIDTH_FACTOR)));
+
+  const start = Math.PI * 0.75;
+  const end = Math.PI * 2.25;
+
+  ctx.lineWidth = thickness;
+  ctx.lineCap = 'butt';
+
+  ctx.beginPath();
+  ctx.strokeStyle = 'rgba(204, 204, 220, 0.12)';
+  ctx.arc(cx, cy, r, start, end);
+  ctx.stroke();
+
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = 'rgba(204, 204, 220, 0.28)';
+  for (const marker of GRAFANA_GAUGE_THRESHOLD_MARKERS) {
+    const markerAngle = start + (end - start) * marker;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r + thickness * 0.8, markerAngle - 0.035, markerAngle + 0.035);
+    ctx.stroke();
+  }
+
+  const leftLabel = formatFn ? formatFn(min) : String(min);
+  const rightLabel = formatFn ? formatFn(max) : String(max);
+  const scaleY = cy + r * 0.58;
+  ctx.fillStyle = 'rgba(204, 204, 220, 0.5)';
+  ctx.font = '11px Inter, Helvetica, Arial, sans-serif';
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = 'left';
+  ctx.fillText(leftLabel, cx - r, scaleY);
+  ctx.textAlign = 'right';
+  ctx.fillText(rightLabel, cx + r, scaleY);
+
+  if (value !== null && Number.isFinite(value) && max > min) {
+    const t = clamp((value - min) / (max - min), 0, 1);
+    let stroke = '#1a7f4b';
+    if (t > 0.66) {
+      stroke = '#d10e5c';
+    } else if (t > 0.33) {
+      stroke = '#ff9900';
+    }
+
+    ctx.beginPath();
+    ctx.strokeStyle = stroke;
+    ctx.arc(cx, cy, r, start, start + (end - start) * t);
+    ctx.stroke();
+
+    const markerAngle = start + (end - start) * t;
+    const markerX = cx + Math.cos(markerAngle) * r;
+    const markerY = cy + Math.sin(markerAngle) * r;
+    ctx.beginPath();
+    ctx.fillStyle = stroke;
+    ctx.arc(markerX, markerY, Math.max(2.5, thickness * 0.34), 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = 'rgb(204, 204, 220)';
+    ctx.font = '500 26px Inter, Helvetica, Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(formatFn ? formatFn(value) : formatSeconds(value), cx, cy - 4);
+
+    ctx.fillStyle = 'rgba(204, 204, 220, 0.65)';
+    ctx.font = '12px Inter, Helvetica, Arial, sans-serif';
+    ctx.fillText(label ?? 'Finality Avg', cx, cy + 20);
+  } else {
+    ctx.fillStyle = 'rgba(204, 204, 220, 0.65)';
+    ctx.font = '12px Inter, Helvetica, Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('—', cx, cy - 4);
+    ctx.fillText(label ?? 'Finality Avg', cx, cy + 20);
+  }
+}
+
+function renderHeatmap(canvas: HTMLCanvasElement, rowLabels: string[], columns: number[][]): void {
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth;
+  const h = canvas.clientHeight;
+  canvas.width = Math.max(1, Math.round(w * dpr));
+  canvas.height = Math.max(1, Math.round(h * dpr));
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    return;
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+
+  const layout = computeHeatmapLayout(w, h, rowLabels, columns);
+  if (!layout) {
+    ctx.fillStyle = 'rgba(204, 204, 220, 0.65)';
+    ctx.font = '12px Inter, Helvetica, Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('—', w / 2, h / 2);
+    return;
+  }
+  const { rows, drawCols, x0, y0, cellW, cellH, rowGap, maxV, legendX0, legendY, legendWidth, legendHeight } = layout;
+  const pad = 8;
+  const labelW = x0 - pad;
+
+  ctx.fillStyle = 'rgba(204, 204, 220, 0.65)';
+  ctx.font = '10px Inter, Helvetica, Arial, sans-serif';
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'middle';
+  for (let r = 0; r < rows; r++) {
+    ctx.fillText(rowLabels[rows - 1 - r], pad + labelW - 4, pad + r * (cellH + rowGap) + cellH / 2);
+  }
+
+  ctx.strokeStyle = 'rgba(204, 204, 220, 0.25)';
+  ctx.lineWidth = 0.5;
+  ctx.beginPath();
+  ctx.moveTo(x0, y0 + rows * (cellH + rowGap));
+  ctx.lineTo(x0 + drawCols.length * cellW, y0 + rows * (cellH + rowGap));
+  ctx.stroke();
+
+  for (let c = 0; c < drawCols.length; c++) {
+    const col = drawCols[c];
+    const x = x0 + c * cellW;
+    for (let r = 0; r < rows; r++) {
+      const bucketIdx = rows - 1 - r;
+      const v = col[bucketIdx] ?? 0;
+      ctx.fillStyle = v > 0 ? heatColor(v, maxV, bucketIdx, rows) : '#131619';
+      ctx.fillRect(x + 1, y0 + r * (cellH + rowGap) + 1, cellW - 2, Math.max(2, cellH - 2));
+    }
+  }
+
+  const lCellW = 7;
+  const lCellH = legendHeight;
+  const lGap = 1;
+  const lCount = 28;
+  for (let i = 0; i < lCount; i++) {
+    const t = i / (lCount - 1);
+    const gPos = t * (HEAT_STOPS.length - 1);
+    const lo = Math.floor(gPos);
+    const hi = Math.min(lo + 1, HEAT_STOPS.length - 1);
+    const f = gPos - lo;
+    const rr = Math.round(HEAT_STOPS[lo][0] + (HEAT_STOPS[hi][0] - HEAT_STOPS[lo][0]) * f);
+    const gg = Math.round(HEAT_STOPS[lo][1] + (HEAT_STOPS[hi][1] - HEAT_STOPS[lo][1]) * f);
+    const bb = Math.round(HEAT_STOPS[lo][2] + (HEAT_STOPS[hi][2] - HEAT_STOPS[lo][2]) * f);
+    ctx.fillStyle = `rgb(${rr},${gg},${bb})`;
+    ctx.fillRect(legendX0 + i * (lCellW + lGap), legendY, lCellW, lCellH);
+  }
+  const lTotalW = legendWidth;
+  ctx.fillStyle = 'rgba(204, 204, 220, 0.5)';
+  ctx.font = '9px Inter, Helvetica, Arial, sans-serif';
+  ctx.textBaseline = 'top';
+  const lTicks = [
+    0,
+    Math.round(maxV * 0.25),
+    Math.round(maxV * 0.5),
+    Math.round(maxV * 0.75),
+    Math.round(maxV),
+  ];
+  for (const tick of lTicks) {
+    const tx = legendX0 + (maxV <= 0 ? 0 : (tick / maxV) * lTotalW);
+    ctx.textAlign = tick === 0 ? 'left' : tick === lTicks[lTicks.length - 1] ? 'right' : 'center';
+    ctx.fillText(formatInt(tick), tx, legendY + lCellH + 2);
+  }
+}
+
+async function httpGet(url: string, bearerToken: string): Promise<string> {
+  return await bridgeHttpGet(url, bearerToken);
+}
+
+async function httpGetFast(url: string, bearerToken: string, timeoutMs: number): Promise<string> {
+  return await bridgeHttpGetFast(url, bearerToken, timeoutMs);
+}
+
+async function fetchStatus(cfg: AppConfig): Promise<StatusInfo> {
+  const body = await httpGetFast(cfg.statusUrl, cfg.bearerToken, 2000);
+  return JSON.parse(body) as StatusInfo;
+}
+
+async function fetchMetrics(cfg: AppConfig): Promise<string> {
+  try {
+    return await httpGetFast(cfg.metricsUrlPrimary, cfg.bearerToken, 2000);
+  } catch {
+    return await httpGetFast(cfg.metricsUrlFallback, cfg.bearerToken, 2000);
+  }
+}
+
+function computeAvg(sum: number | null, count: number | null): number | null {
+  if (sum === null || count === null || !Number.isFinite(sum) || !Number.isFinite(count) || count <= 0) {
+    return null;
+  }
+  return sum / count;
+}
+
+function verifyBucketOrder(): string[] {
+  return ['0', '0.001', '0.005', '0.01', '0.05', '0.1', '0.5', '+Inf'];
+}
+
+function bucketLabel(le: string): string {
+  if (le === '+Inf') {
+    return '>500ms';
+  }
+  if (le === '0') {
+    return '0ms';
+  }
+  const f = Number.parseFloat(le);
+  if (!Number.isFinite(f)) {
+    return le;
+  }
+  if (f < 1) {
+    return `${Math.round(f * 1000)}ms`;
+  }
+  return `${f}s`;
+}
+
+function initState(): DashboardState {
+  return {
+    online: false,
+    statusTs: null,
+    lastError: null,
+    logs: [],
+
+    seriesT: [],
+    seriesInboundRate: [],
+    seriesOutboundRate: [],
+
+    lastInboundTotal: null,
+    lastOutboundTotal: null,
+
+    votesSentTotal: null,
+    votesAcceptedTotal: null,
+    votesRejectedTotal: null,
+    lastVotesSentTotal: null,
+    lastVotesAcceptedTotal: null,
+    lastVotesRejectedTotal: null,
+    votesSentRate: null,
+    votesAcceptedRate: null,
+    votesRejectedRate: null,
+
+    rpcBroadcastTotal: null,
+    rpcAcceptedTotal: null,
+    rpcDupTotal: null,
+    rpcErrorsTotal: null,
+
+    finalityAvgSec: null,
+    finalityEventsTotal: null,
+    finalityMintEventsTotal: null,
+    tps: null,
+    prevFinalizedTxTotal: null,
+
+    verifyAvgSec: null,
+    verifyCount: null,
+    consensusErrorsTotal: null,
+    verifyBucketOrder: verifyBucketOrder(),
+    verifyPrevCum: null,
+    heatmapColumns: [],
+
+    validators: [],
+    validatorsLoading: false,
+    validatorsError: null,
+    validatorsTs: null,
+
+    // P2P Netzwerk
+    p2pPeersTotal: null,
+    p2pPeersKnown: null,
+    p2pPeersBanned: null,
+    p2pPeersMiner: null,
+    p2pPeersValidator: null,
+    p2pInboundTotal: null,
+    p2pOutboundTotal: null,
+    p2pInboundBytes: null,
+    p2pOutboundBytes: null,
+    p2pOutboxDepth: null,
+
+    // Mempool & Proposer
+    mempoolSize: null,
+    mempoolAccepted: null,
+    mempoolRejected: null,
+    mempoolDuplicate: null,
+    mempoolTtlEvict: null,
+    mempoolCapEvict: null,
+    mempoolInvalidated: null,
+    proposerBuiltTotal: null,
+    proposerLastSize: null,
+    proposerPending: null,
+
+    minerMetrics: initMinerMetrics(),
+    mintStatus: null,
+    minerHashrateSeries: [],
+  };
+}
+
+function pushLog(state: DashboardState, line: string): void {
+  const max = 400;
+  const last = state.logs.length > 0 ? state.logs[state.logs.length - 1] : null;
+  if (last) {
+    const idx = last.indexOf('] ');
+    const lastLine = idx >= 0 ? last.slice(idx + 2) : last;
+    if (lastLine === line) {
+      return;
+    }
+  }
+  const ts = new Date().toISOString();
+  state.logs.push(`[${ts}] ${line}`);
+  if (state.logs.length > max) {
+    state.logs.splice(0, state.logs.length - max);
+  }
+}
+
+function pushSeries(state: DashboardState, t: number, inbound: number, outbound: number): void {
+  const max = 120;
+  state.seriesT.push(t);
+  state.seriesInboundRate.push(inbound);
+  state.seriesOutboundRate.push(outbound);
+  if (state.seriesT.length > max) {
+    state.seriesT.shift();
+    state.seriesInboundRate.shift();
+    state.seriesOutboundRate.shift();
+  }
+}
+
+function pushHeatmapColumn(state: DashboardState, col: number[]): void {
+  const max = 120;
+  state.heatmapColumns.push(col);
+  if (state.heatmapColumns.length > max) {
+    state.heatmapColumns.shift();
+  }
+}
+
+function computeVerifyHeatColumn(state: DashboardState, metricsText: string): number[] | null {
+  const samples = parsePrometheus(metricsText);
+  const cum = getHistogramBuckets(samples, 'pc_node_verify_seconds_bucket', 'le');
+  const order = state.verifyBucketOrder;
+
+  const currentCum = order.map((k) => cum.get(k) ?? 0);
+
+  if (!state.verifyPrevCum) {
+    const m = new Map<string, number>();
+    for (let i = 0; i < order.length; i++) {
+      m.set(order[i], currentCum[i]);
+    }
+    state.verifyPrevCum = m;
+    return null;
+  }
+
+  const prevCum = order.map((k) => state.verifyPrevCum!.get(k) ?? 0);
+  const deltaCum = currentCum.map((v, i) => Math.max(0, v - prevCum[i]));
+
+  const perBucket: number[] = [];
+  for (let i = 0; i < deltaCum.length; i++) {
+    const prev = i === 0 ? 0 : deltaCum[i - 1];
+    perBucket.push(Math.max(0, deltaCum[i] - prev));
+  }
+
+  for (let i = 0; i < order.length; i++) {
+    state.verifyPrevCum!.set(order[i], currentCum[i]);
+  }
+
+  return perBucket;
+}
+
+async function poll(cfg: AppConfig, state: DashboardState): Promise<void> {
+  const t = nowSec();
+  const prevT = state.seriesT.length ? state.seriesT[state.seriesT.length - 1] : null;
+  const dt = prevT === null ? 1 : Math.max(1, t - prevT);
+  const status = await fetchStatus(cfg);
+  if (!status.ok) {
+    throw new Error('Status ok=false');
+  }
+
+  state.online = true;
+  state.statusTs = status.ts ?? null;
+
+  const metricsText = await fetchMetrics(cfg);
+  const samples = parsePrometheus(metricsText);
+
+  const inboundTotal = getScalar(samples, 'pc_p2p_inbound_bytes_total');
+  const outboundTotal = getScalar(samples, 'pc_p2p_outbound_bytes_total');
+
+  let inboundRate = 0;
+  let outboundRate = 0;
+  if (inboundTotal !== null && state.lastInboundTotal !== null) {
+    inboundRate = Math.max(0, inboundTotal - state.lastInboundTotal) / dt;
+  }
+  if (outboundTotal !== null && state.lastOutboundTotal !== null) {
+    outboundRate = Math.max(0, outboundTotal - state.lastOutboundTotal) / dt;
+  }
+  if (inboundTotal !== null) {
+    state.lastInboundTotal = inboundTotal;
+  }
+  if (outboundTotal !== null) {
+    state.lastOutboundTotal = outboundTotal;
+  }
+
+  pushSeries(state, t, inboundRate, outboundRate);
+
+  state.votesSentTotal = getScalar(samples, 'pc_node_votes_sent_total');
+  state.votesAcceptedTotal = getScalar(samples, 'pc_node_votes_accepted_total');
+  state.votesRejectedTotal = getScalar(samples, 'pc_node_votes_rejected_total');
+
+  state.votesSentRate =
+    state.votesSentTotal !== null && state.lastVotesSentTotal !== null
+      ? Math.max(0, state.votesSentTotal - state.lastVotesSentTotal) / dt
+      : null;
+  state.votesAcceptedRate =
+    state.votesAcceptedTotal !== null && state.lastVotesAcceptedTotal !== null
+      ? Math.max(0, state.votesAcceptedTotal - state.lastVotesAcceptedTotal) / dt
+      : null;
+  state.votesRejectedRate =
+    state.votesRejectedTotal !== null && state.lastVotesRejectedTotal !== null
+      ? Math.max(0, state.votesRejectedTotal - state.lastVotesRejectedTotal) / dt
+      : null;
+
+  if (state.votesSentTotal !== null) state.lastVotesSentTotal = state.votesSentTotal;
+  if (state.votesAcceptedTotal !== null) state.lastVotesAcceptedTotal = state.votesAcceptedTotal;
+  if (state.votesRejectedTotal !== null) state.lastVotesRejectedTotal = state.votesRejectedTotal;
+
+  const rpcBroadcastTotal = getScalar(samples, 'phantom_node_rpc_broadcast_total');
+  const rpcAcceptedTotal = getScalar(samples, 'phantom_node_rpc_broadcast_accepted_total');
+  const rpcDupTotal = getScalar(samples, 'phantom_node_rpc_broadcast_duplicate_total');
+  const rpcErrorsTotal = getScalar(samples, 'phantom_node_rpc_broadcast_errors_total');
+  const mempoolAccepted = getScalar(samples, 'pc_node_mempool_accepted_total');
+  const mempoolDup = getScalar(samples, 'pc_node_mempool_duplicate_total');
+  const mempoolRejected = getScalar(samples, 'pc_node_mempool_rejected_total');
+  const mempoolConflict = getScalar(samples, 'pc_node_mempool_conflict_total');
+
+  state.rpcAcceptedTotal = rpcAcceptedTotal ?? mempoolAccepted;
+  state.rpcDupTotal = rpcDupTotal ?? mempoolDup;
+  state.rpcErrorsTotal =
+    rpcErrorsTotal
+    ?? (mempoolRejected !== null || mempoolConflict !== null
+      ? (mempoolRejected ?? 0) + (mempoolConflict ?? 0)
+      : null);
+  state.rpcBroadcastTotal =
+    rpcBroadcastTotal
+    ?? (state.rpcAcceptedTotal !== null || state.rpcDupTotal !== null || state.rpcErrorsTotal !== null
+      ? (state.rpcAcceptedTotal ?? 0) + (state.rpcDupTotal ?? 0) + (state.rpcErrorsTotal ?? 0)
+      : null);
+
+  const finalitySum = getScalar(samples, 'pc_node_finality_seconds_sum');
+  const finalityCount = getScalar(samples, 'pc_node_finality_seconds_count');
+  state.finalityAvgSec = finalityCount === 0 ? 0 : computeAvg(finalitySum, finalityCount);
+  state.finalityEventsTotal = getScalar(samples, 'pc_node_finality_events_total');
+  state.finalityMintEventsTotal = getScalar(samples, 'pc_node_finality_mint_events_total');
+
+  const finalizedTxTotal = getScalar(samples, 'pc_node_finalized_tx_total');
+  if (finalizedTxTotal !== null && state.prevFinalizedTxTotal !== null && dt > 0) {
+    const delta = Math.max(0, finalizedTxTotal - state.prevFinalizedTxTotal);
+    state.tps = delta / dt;
+  }
+  state.prevFinalizedTxTotal = finalizedTxTotal;
+
+  const verifySum = getScalar(samples, 'pc_node_verify_seconds_sum');
+  const verifyCount = getScalar(samples, 'pc_node_verify_seconds_count');
+  state.verifyAvgSec = computeAvg(verifySum, verifyCount);
+  state.verifyCount = verifyCount;
+
+  // Consensus errors: summiere alle phantom_node_consensus_*_errors_total
+  let consErrors = 0;
+  let consErrorsFound = false;
+  for (const s of samples) {
+    if (s.name.startsWith('phantom_node_consensus_') && s.name.endsWith('_errors_total')) {
+      consErrors += s.value;
+      consErrorsFound = true;
+    }
+  }
+  state.consensusErrorsTotal = consErrorsFound ? consErrors : null;
+
+  const col = computeVerifyHeatColumn(state, metricsText);
+  if (col) {
+    pushHeatmapColumn(state, col);
+  }
+
+  // P2P Netzwerk
+  state.p2pInboundTotal = inboundTotal;
+  state.p2pOutboundTotal = outboundTotal;
+  state.p2pInboundBytes = getScalar(samples, 'pc_p2p_inbound_bytes_total');
+  state.p2pOutboundBytes = getScalar(samples, 'pc_p2p_outbound_bytes_total');
+  state.p2pOutboxDepth = getScalar(samples, 'pc_p2p_outbox_depth');
+  state.p2pPeersKnown = getScalar(samples, 'pc_p2p_peers_known_total');
+  state.p2pPeersBanned = getScalar(samples, 'pc_p2p_peers_banned_total');
+  state.p2pPeersMiner = getScalar(samples, 'pc_p2p_peers_miner_total');
+  state.p2pPeersValidator = getScalar(samples, 'pc_p2p_peers_validator_total');
+  const peersConnected = getScalar(samples, 'pc_p2p_peers_connected_total');
+  state.p2pPeersTotal = peersConnected
+    ?? (state.p2pPeersKnown !== null ? state.p2pPeersKnown : null);
+
+  // Mempool & Proposer
+  state.mempoolSize = getScalar(samples, 'pc_node_mempool_size');
+  state.mempoolAccepted = mempoolAccepted;
+  state.mempoolRejected = mempoolRejected;
+  state.mempoolDuplicate = mempoolDup;
+  state.mempoolTtlEvict = getScalar(samples, 'pc_node_mempool_ttl_evict_total');
+  state.mempoolCapEvict = getScalar(samples, 'pc_node_mempool_cap_evict_total');
+  state.mempoolInvalidated = getScalar(samples, 'pc_node_mempool_invalidated_total');
+  state.proposerBuiltTotal = getScalar(samples, 'pc_node_proposer_built_total');
+  state.proposerLastSize = getScalar(samples, 'pc_node_proposer_last_size');
+  state.proposerPending = getScalar(samples, 'pc_node_proposer_pending');
+}
+
+let _powHashPrev: number | null = null;
+let _powHashPrevTs: number = 0;
+
+async function pollMinerMetrics(nodeMetricsUrl: string, mintRpcAddr: string, state: DashboardState): Promise<void> {
+  const mm = state.minerMetrics;
+
+  // 1. Internal PoW-Miner metrics from Node endpoint (pc_node_pow_*)
+  try {
+    const text = await httpGetFast(nodeMetricsUrl, '', 2000);
+    const samples = parsePrometheus(text);
+    const miningActive = getScalar(samples, 'pc_node_pow_mining_active');
+    const activeLocalSlots = getScalar(samples, 'pc_node_pow_active_local_slots');
+    const activeWorkSlots = getScalar(samples, 'pc_node_pow_candidate_active_work_slots');
+    const hashesTotal = getScalar(samples, 'pc_node_pow_hashes_total');
+    const blocksFound = getScalar(samples, 'pc_node_pow_blocks_found_total');
+    const submitOk = getScalar(samples, 'pc_node_pow_submit_ok_total');
+    const submitStale = getScalar(samples, 'pc_node_pow_submit_stale_total');
+    const submitErr = getScalar(samples, 'pc_node_pow_submit_err_total');
+    const candidateQueued = getScalar(samples, 'pc_node_pow_candidate_queued_total');
+    const candidateReplaced = getScalar(samples, 'pc_node_pow_candidate_replaced_total');
+    const candidateSkipped = getScalar(samples, 'pc_node_pow_candidate_skipped_not_better_total');
+    const candidateScopeResets = getScalar(samples, 'pc_node_pow_candidate_scope_resets_total');
+
+    mm.hashesTotal = hashesTotal;
+    mm.activeLocalSlots = activeLocalSlots;
+    mm.activeWorkSlots = activeWorkSlots;
+    mm.submitAcceptedTotal = submitOk;
+    mm.submitStaleTotal = submitStale;
+    mm.submitErrorsTotal = submitErr;
+    mm.submitRejectedTotal = 0;
+    mm.templatesTotal = blocksFound;
+    mm.templateErrorsTotal = null;
+    mm.candidateQueuedTotal = candidateQueued;
+    mm.candidateReplacedTotal = candidateReplaced;
+    mm.candidateSkippedNotBetterTotal = candidateSkipped;
+    mm.candidateScopeResetsTotal = candidateScopeResets;
+
+    // Hashrate aus Differenz berechnen
+    const now = Date.now();
+    if (_powHashPrev !== null && hashesTotal !== null && _powHashPrevTs > 0) {
+      const dtSec = (now - _powHashPrevTs) / 1000;
+      if (dtSec > 0.5) {
+        const dHash = hashesTotal - _powHashPrev;
+        mm.hashrate = dHash / dtSec;
+      }
+    }
+    _powHashPrev = hashesTotal;
+    _powHashPrevTs = now;
+
+    // Uptime/Threads/CPU/Memory kommen vom Node-Prozess
+    const rssBytes = getScalar(samples, 'pc_node_process_rss_bytes');
+    mm.memoryMb = rssBytes !== null ? Math.round(rssBytes / (1024 * 1024)) : null;
+    mm.cpuPct = getScalar(samples, 'pc_node_process_cpu_percent');
+    mm.threads = miningActive !== null && miningActive > 0 ? 1 : 0;
+    mm.uptimeSec = null;
+    mm.lastTemplateEpoch = null;
+    mm.lastSubmitOkEpoch = null;
+    mm.lastTemplateFetchMs = null;
+    mm.lastSubmitMs = null;
+    mm.lastError = miningActive === null ? 'internal miner inactive' : null;
+
+    if (mm.hashrate !== null) {
+      state.minerHashrateSeries.push(mm.hashrate);
+      if (state.minerHashrateSeries.length > 120) state.minerHashrateSeries.shift();
+    }
+  } catch (e) {
+    mm.lastError = `miner-metrics: ${e}`;
+  }
+
+  // 2. Mint-Status via mint_rpc
+  try {
+    const mintUrl = mintRpcAddr.startsWith('http') ? mintRpcAddr : `http://${mintRpcAddr}`;
+    const body = await httpGetFast(`${mintUrl}/mint/status`, '', 2000);
+    state.mintStatus = JSON.parse(body) as MintStatusInfo;
+  } catch {
+    state.mintStatus = null;
+  }
+}
+
+function formatHashrate(hps: number | null): string {
+  if (hps === null || !Number.isFinite(hps)) return '-';
+  if (hps >= 1e12) return `${(hps / 1e12).toFixed(2)} TH/s`;
+  if (hps >= 1e9) return `${(hps / 1e9).toFixed(2)} GH/s`;
+  if (hps >= 1e6) return `${(hps / 1e6).toFixed(2)} MH/s`;
+  if (hps >= 1e3) return `${(hps / 1e3).toFixed(2)} kH/s`;
+  return `${hps.toFixed(1)} H/s`;
+}
+
+function formatUptime(sec: number | null): string {
+  if (sec === null || !Number.isFinite(sec) || sec < 0) return '-';
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = Math.floor(sec % 60);
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
+function formatEpochAge(epoch: number | null): string {
+  if (epoch === null || epoch === 0) return '-';
+  const now = Math.floor(Date.now() / 1000);
+  const age = now - epoch;
+  if (age < 0) return 'jetzt';
+  if (age < 60) return `vor ${age}s`;
+  if (age < 3600) return `vor ${Math.floor(age / 60)}m`;
+  return `vor ${Math.floor(age / 3600)}h ${Math.floor((age % 3600) / 60)}m`;
+}
+
+function formatBytes(b: number | null): string {
+  if (b === null || !Number.isFinite(b)) return '0 B';
+  if (b >= 1e12) return `${(b / 1e12).toFixed(2)} TB`;
+  if (b >= 1e9) return `${(b / 1e9).toFixed(2)} GB`;
+  if (b >= 1e6) return `${(b / 1e6).toFixed(2)} MB`;
+  if (b >= 1e3) return `${(b / 1e3).toFixed(1)} kB`;
+  return `${Math.round(b)} B`;
+}
+
+function formatSupplyPhm(raw: string | undefined): string {
+  if (!raw) return '0 PC';
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n === 0) return '0 PC';
+  const phm = n / 100_000_000;
+  if (phm >= 1) return `${phm.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })} PC`;
+  return `${phm.toFixed(8)} PC`;
+}
+
+type DetectedEndpoints = {
+  statusUrl: string;
+  metricsUrlPrimary: string;
+  metricsUrlFallback: string;
+};
+
+async function tryDetectEndpoints(bearerToken: string): Promise<DetectedEndpoints | null> {
+  const ports = await listListenPorts();
+  const uniq = Array.from(new Set(ports.map((p) => p.port))).filter((p) => Number.isFinite(p) && p > 0 && p <= 65535);
+  const preferred = [8080, 8090, 9100, 19090, 8443, 9000];
+  const ordered = [...preferred.filter((p) => uniq.includes(p)), ...uniq.filter((p) => !preferred.includes(p))].slice(0, 256);
+
+  let statusPort: number | null = null;
+  for (const port of ordered) {
+    try {
+      const body = await httpGetFast(`http://127.0.0.1:${port}/status`, bearerToken, 250);
+      const st = JSON.parse(body) as StatusInfo;
+      if (st && typeof st.ok === 'boolean' && st.ok) {
+        statusPort = port;
+        break;
+      }
+    } catch {
+      // ignore
+    }
+  }
+  if (statusPort === null) {
+    return null;
+  }
+
+  let metricsPort: number | null = null;
+  const metricsCandidates = [8090, 9100, statusPort, ...ordered];
+  for (const port of metricsCandidates) {
+    if (port === null) continue;
+    try {
+      const body = await httpGetFast(`http://127.0.0.1:${port}/metrics`, bearerToken, 250);
+      if (body && body.length > 0) {
+        metricsPort = port;
+        if (port === 8090 || port === 9100) break;
+      }
+    } catch {
+      // ignore
+    }
+  }
+  if (metricsPort === null) {
+    return null;
+  }
+
+  const statusBase = `http://127.0.0.1:${statusPort}`;
+  const metricsBase = `http://127.0.0.1:${metricsPort}`;
+  return {
+    statusUrl: `${statusBase}/status`,
+    metricsUrlPrimary: `${metricsBase}/metrics`,
+    metricsUrlFallback: `${statusBase}/metrics`,
+  };
+}
+
+function StatTile({ label, value, small }: { label: string; value: string; small?: boolean }): JSX.Element {
+  return (
+    <div className="stat">
+      <div className="stat-label">{label}</div>
+      <div className={small ? 'stat-value stat-value-mono' : 'stat-value'}>{value}</div>
+      <div className="stat-sub" />
+    </div>
+  );
+}
+
+function PanelInfo({ text }: { text?: string }): JSX.Element | null {
+  const [open, setOpen] = useState(false);
+  if (!text) return null;
+  return (
+    <button
+      className="panel-info-btn"
+      onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
+      onBlur={() => setOpen(false)}
+    >
+      i
+      {open && <div className="panel-info-tooltip">{text}</div>}
+    </button>
+  );
+}
+
+function LogViewport({ text, maxHeight }: { text: string; maxHeight: string }): JSX.Element {
+  return (
+    <pre
+      className="log-scroll-pre"
+      style={{
+        maxHeight,
+        overflow: 'auto',
+        background: 'rgba(11, 12, 14, 0.52)',
+      }}
+    >
+      {text}
+    </pre>
+  );
+}
+
+async function listListenPorts(): Promise<ListenPort[]> {
+  return await bridgeListListenPorts() as ListenPort[];
+}
+
+async function appQuit(): Promise<void> {
+  await bridgeAppQuit();
+}
+
+async function walletGenerateMnemonic(): Promise<string> {
+  return await bridgeWalletGenerateMnemonic();
+}
+
+async function walletCreate(args: { wallet_name: string; hrp: string; mnemonic: string; password: string }): Promise<WalletStatus> {
+  return await bridgeWalletCreate(args) as WalletStatus;
+}
+
+async function walletCreateWatchOnly(args: {
+  wallet_name: string;
+  hrp: string;
+  xpub: string;
+  derivation: string;
+  fingerprint?: string | null;
+}): Promise<WalletStatus> {
+  return await bridgeWalletCreateWatchOnly(args) as WalletStatus;
+}
+
+async function walletStatus(walletName: string): Promise<WalletStatus> {
+  return await bridgeWalletStatus(walletName) as WalletStatus;
+}
+
+async function walletUnlock(walletName: string, passphrase: string): Promise<WalletUnlockResp> {
+  return await bridgeWalletUnlock(walletName, passphrase) as WalletUnlockResp;
+}
+
+async function walletLock(): Promise<void> {
+  await bridgeWalletLock();
+}
+
+async function walletSelectAddr(walletName: string, addr: string): Promise<WalletStatus> {
+  return await bridgeWalletSelectAddr(walletName, addr) as WalletStatus;
+}
+
+async function walletSend(args: { from_addr: string; to_addr: string; amount: number; fee?: number; change_addr?: string | null }): Promise<SignerCmdResp> {
+  return await bridgeWalletSend(args) as SignerCmdResp;
+}
+
+type WalletBackupResp = {
+  ok: boolean;
+  backup_dir: string;
+};
+
+async function walletBackupToDir(args: { wallet_name: string; dst_dir: string }): Promise<WalletBackupResp> {
+  return await bridgeWalletBackupToDir(args) as WalletBackupResp;
+}
+
+async function walletRestoreFromDir(args: { wallet_name: string; src_dir: string; force?: boolean }): Promise<WalletStatus> {
+  return await bridgeWalletRestoreFromDir(args) as WalletStatus;
+}
+
+async function walletHistoryCsvAppend(args: { wallet_name: string; events: unknown[] }): Promise<{ written: number }> {
+  return await bridgeWalletHistoryCsvAppend(args) as { written: number };
+}
+
+async function walletHistoryCsvOpenFolder(args: { wallet_name: string }): Promise<string> {
+  return await bridgeWalletHistoryCsvOpenFolder(args) as string;
+}
+
+async function walletHistoryCsvRange(args: { wallet_name: string; from_ts: number; to_ts: number }): Promise<string> {
+  return await bridgeWalletHistoryCsvRange(args) as string;
+}
+
+async function bitboxBridgeStatus(args: { transport: string; bridge_url: string }): Promise<string> {
+  return await bridgeBitboxBridgeStatus(args) as string;
+}
+
+async function bitboxHwiEnumerate(args: { transport: string; bridge_url: string }): Promise<SignerCmdResp> {
+  return await bridgeBitboxHwiEnumerate(args) as SignerCmdResp;
+}
+
+async function bitboxHwiGetXpub(args: { transport: string; bridge_url: string; fingerprint?: string | null; derivation: string }): Promise<SignerCmdResp> {
+  return await bridgeBitboxHwiGetXpub(args) as SignerCmdResp;
+}
+
+async function validatorKeygenBls(args: { store_dir: string; passphrase: string; force: boolean; use_passphrase_role: boolean }): Promise<ValidatorBlsInfoResp> {
+  return await bridgeValidatorKeygenBls(args) as ValidatorBlsInfoResp;
+}
+
+async function validatorBlsInfo(args: { store_dir: string; passphrase: string; use_passphrase_role: boolean }): Promise<ValidatorBlsInfoResp> {
+  return await bridgeValidatorBlsInfo(args) as ValidatorBlsInfoResp;
+}
+
+async function validatorStakeBond(args: { addr: string; utxos: string[] }): Promise<SignerCmdResp> {
+  return await bridgeValidatorStakeBond(args) as SignerCmdResp;
+}
+
+async function validatorStakeUnbond(args: { addr: string; utxos: string[] }): Promise<SignerCmdResp> {
+  return await bridgeValidatorStakeUnbond(args) as SignerCmdResp;
+}
+
+async function validatorRegister(args: { addr: string; anchor_utxo: string; operator_id?: string | null; validator_passphrase: string; use_passphrase_role: boolean }): Promise<SignerCmdResp> {
+  return await bridgeValidatorRegister(args) as SignerCmdResp;
+}
+
+async function nodeStart(args: ManagedNodeStartArgs): Promise<ManagedNodeStatus> {
+  return await bridgeNodeStart(args) as ManagedNodeStatus;
+}
+
+async function nodeStop(): Promise<void> {
+  await bridgeNodeStop();
+}
+
+async function nodeStatus(): Promise<ManagedNodeStatus> {
+  return await bridgeNodeStatus() as ManagedNodeStatus;
+}
+
+async function nodeLogs(limit: number): Promise<string[]> {
+  return await bridgeNodeLogs(limit);
+}
+
+type NodeBackupResp = {
+  ok: boolean;
+  dst: string;
+  config_path?: string | null;
+};
+
+async function nodeBackupStore(args: { store_dir: string; backup_target: string; local_node_addr?: string | null; mint_rpc_addr?: string | null; p2p_listen_addr?: string | null; metrics_url?: string | null }): Promise<NodeBackupResp> {
+  return await bridgeNodeBackupStore(args) as NodeBackupResp;
+}
+
+type CanonicalGenesisResetPrepareResp = {
+  ok: boolean;
+  token: string;
+  ready_at_unix_ms: number;
+  network_id: string;
+  already_active: boolean;
+  message: string;
+};
+
+type CanonicalGenesisResetCommitResp = {
+  ok: boolean;
+  network_id: string;
+  already_active: boolean;
+  genesis_note_path: string;
+  backup_path: string | null;
+  message: string;
+};
+
+async function canonicalGenesisResetPrepare(args: {
+  store_dir: string;
+  confirm_text: string;
+}): Promise<CanonicalGenesisResetPrepareResp> {
+  return await bridgeCanonicalGenesisResetPrepare(args) as CanonicalGenesisResetPrepareResp;
+}
+
+async function canonicalGenesisResetCommit(args: {
+  store_dir: string;
+  token: string;
+}): Promise<CanonicalGenesisResetCommitResp> {
+  return await bridgeCanonicalGenesisResetCommit(args) as CanonicalGenesisResetCommitResp;
+}
+
+type WalletUtxo = {
+  txid: string;
+  vout: number;
+  amount: number;
+  minted_at: number;
+  staked: boolean;
+};
+
+type WalletHistoryItem = {
+  anchor_index: number;
+  payload_root: string;
+  txid: string;
+  event_type: 'mint' | 'micro_tx' | string;
+  direction: 'in' | 'out' | string;
+  amount: number;
+  lock: string;
+  outpoint_txid: string;
+  outpoint_vout: number;
+  outpoint: string;
+  staked: boolean;
+};
+
+type WalletUtxoResp = {
+  ok: boolean;
+  lock: string;
+  balance: number;
+  staked_balance: number;
+  n_utxos: number;
+  utxos: WalletUtxo[];
+  n_history?: number;
+  history?: WalletHistoryItem[];
+  error?: string;
+};
+
+async function nodeWalletUtxosByLock(lockHex: string): Promise<WalletUtxoResp> {
+  const txt = await bridgeNodeWalletUtxosByLock(lockHex);
+  return JSON.parse(txt) as WalletUtxoResp;
+}
+
+async function nodeWalletHistory(lockHex: string): Promise<WalletUtxoResp> {
+  const txt = await bridgeNodeWalletHistory(lockHex);
+  return JSON.parse(txt) as WalletUtxoResp;
+}
+
+async function nodeConsensusValidators(): Promise<ValidatorsResponse> {
+  const txt = await bridgeNodeConsensusValidators();
+  return JSON.parse(txt) as ValidatorsResponse;
+}
+
+const WALLET_ACTIVE_KEY = 'phantom.dashboard.wallet.active';
+
+function loadJson<T>(key: string): T | null {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) {
+      return null;
+    }
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+function saveJson(key: string, value: unknown): void {
+  try {
+    if (value === null || value === undefined) {
+      localStorage.removeItem(key);
+      return;
+    }
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+  }
+}
+
+function WalletCreateWizard({
+  initialWalletName,
+  initialHrp,
+  onCreated,
+}: {
+  initialWalletName: string;
+  initialHrp: string;
+  onCreated: (w: WalletStatus) => void;
+}): JSX.Element {
+  const { t, locale } = useI18n();
+  const [walletName, setWalletName] = useState(initialWalletName);
+  const [hrp, setHrp] = useState(initialHrp);
+  const [walletPassword, setWalletPassword] = useState('');
+  const [walletPasswordConfirm, setWalletPasswordConfirm] = useState('');
+  const [walletPasswordVisible, setWalletPasswordVisible] = useState(false);
+  const [mnemonicWords, setMnemonicWords] = useState<string[]>(() => Array.from({ length: 24 }, () => ''));
+  const [walletStep, setWalletStep] = useState<1 | 2 | 3>(1);
+  const [verifyOrder, setVerifyOrder] = useState<number[]>(() => Array.from({ length: 24 }, (_, i) => i));
+  const [verifyInputs, setVerifyInputs] = useState<string[]>(() => Array.from({ length: 24 }, () => ''));
+  const [verifyMsg, setVerifyMsg] = useState('');
+  const [verified, setVerified] = useState(false);
+
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState('');
+
+  useEffect(() => {
+    setWalletName(initialWalletName);
+  }, [initialWalletName]);
+
+  useEffect(() => {
+    setHrp(initialHrp);
+  }, [initialHrp]);
+
+  const mnemonic = useMemo(() => mnemonicWords.map((w) => w.trim()).join(' ').trim(), [mnemonicWords]);
+  const seedReady = useMemo(() => mnemonicWords.every((w) => w.trim().length > 0), [mnemonicWords]);
+  const seedFixed = useMemo(() => mnemonicWords.map((w) => w.trim().toLowerCase()), [mnemonicWords]);
+  const walletPassTooShort = walletPassword.length > 0 && walletPassword.length < 8;
+  const walletPassMismatch = walletPasswordConfirm.length > 0 && walletPassword !== walletPasswordConfirm;
+  const walletPassOk = walletPassword.length >= 8 && walletPassword === walletPasswordConfirm;
+
+  const seedWordInputStyle: React.CSSProperties = {
+    padding: '10px',
+    borderRadius: '6px',
+    border: '1px solid #22262A',
+    background: '#0B0C0E',
+    color: 'rgb(204, 204, 220)',
+  };
+
+  const actionButtonStyle: React.CSSProperties = {
+    padding: '10px 12px',
+    borderRadius: '6px',
+    border: '1px solid #22262A',
+    background: '#131619',
+    color: 'rgb(204, 204, 220)',
+    cursor: busy ? 'not-allowed' : 'pointer',
+  };
+
+  const setMnemonicWord = (idx: number, value: string) => {
+    setMnemonicWords((prev) => {
+      const next = [...prev];
+      next[idx] = value;
+      return next;
+    });
+  };
+
+  const shuffleIndices = (count: number): number[] => {
+    const arr = Array.from({ length: count }, (_, i) => i);
+    const rand = new Uint32Array(count);
+    crypto.getRandomValues(rand);
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = rand[i] % (i + 1);
+      const tmp = arr[i];
+      arr[i] = arr[j];
+      arr[j] = tmp;
+    }
+    return arr;
+  };
+
+  const resetVerification = () => {
+    setVerified(false);
+    setVerifyMsg('');
+    setVerifyInputs(Array.from({ length: 24 }, () => ''));
+    setVerifyOrder(Array.from({ length: 24 }, (_, i) => i));
+  };
+
+  useEffect(() => {
+    if (walletStep === 1) {
+      resetVerification();
+      setWalletPassword('');
+      setWalletPasswordConfirm('');
+      setWalletPasswordVisible(false);
+    }
+  }, [walletStep]);
+
+  return (
+    <div style={{ display: 'grid', gap: '10px' }}>
+      <div className="small">Wallet Name</div>
+      <input
+        value={walletName}
+        onChange={(e: React.ChangeEvent<HTMLInputElement>) => setWalletName(e.target.value)}
+        disabled={busy}
+        style={{
+          padding: '10px',
+          borderRadius: '6px',
+          border: '1px solid #22262A',
+          background: '#0B0C0E',
+          color: 'rgb(204, 204, 220)',
+        }}
+      />
+
+      <div className="small">Adress-Präfix (z.B. pc)</div>
+      <input
+        value={hrp}
+        onChange={(e: React.ChangeEvent<HTMLInputElement>) => setHrp(e.target.value)}
+        disabled={busy}
+        style={{
+          padding: '10px',
+          borderRadius: '6px',
+          border: '1px solid #22262A',
+          background: '#0B0C0E',
+          color: 'rgb(204, 204, 220)',
+        }}
+      />
+
+      <div className="small">{t.walletSeedPhraseTitle}</div>
+      {walletStep === 1 && (
+        <>
+          <div className="small">{t.walletSeedStep1}</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+            {[0, 1].map((col) => (
+              <div key={col} style={{ display: 'grid', gap: '8px' }}>
+                {Array.from({ length: 12 }, (_, row) => {
+                  const idx = col * 12 + row;
+                  return (
+                    <div
+                      key={idx}
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: '44px 1fr',
+                        gap: '8px',
+                        alignItems: 'center',
+                      }}
+                    >
+                      <div className="small" style={{ opacity: 0.85 }}>
+                        {idx + 1}.
+                      </div>
+                      <input
+                        value={mnemonicWords[idx] ?? ''}
+                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => setMnemonicWord(idx, e.target.value)}
+                        disabled={busy}
+                        style={seedWordInputStyle}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+
+          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', justifyContent: 'center' }}>
+            <button
+              onClick={() =>
+                void (async () => {
+                  try {
+                    setBusy(true);
+                    setMsg(`${t.walletSeedGenerating}...`);
+                    const m = await walletGenerateMnemonic();
+                    const words = m
+                      .trim()
+                      .split(/\s+/)
+                      .filter((w) => w.length > 0);
+                    setMnemonicWords(Array.from({ length: 24 }, (_, i) => words[i] ?? ''));
+                    setWalletStep(1);
+                    setMsg(t.walletSeedGenerated);
+                  } catch (e: unknown) {
+                    setMsg(`${t.error}: ${String(e)}`);
+                  } finally {
+                    setBusy(false);
+                  }
+                })()
+              }
+              disabled={busy || !isTauri}
+              style={{
+                padding: '10px 12px',
+                borderRadius: '6px',
+                border: '1px solid #22262A',
+                background: 'rgba(204, 204, 220, 0.08)',
+                color: 'rgb(204, 204, 220)',
+                cursor: busy || !isTauri ? 'not-allowed' : 'pointer',
+              }}
+              title={!isTauri ? t.tauriOnly : ''}
+            >
+              {t.walletSeedGenerate}
+            </button>
+
+            <button
+              onClick={() => {
+                setVerifyMsg('');
+                setVerifyInputs(Array.from({ length: 24 }, () => ''));
+                setVerifyOrder(shuffleIndices(24));
+                setWalletStep(2);
+              }}
+              disabled={busy || !seedReady}
+              style={{
+                ...actionButtonStyle,
+                background: seedReady ? '#131619' : 'rgba(204, 204, 220, 0.08)',
+              }}
+            >
+              {t.walletSeedVerifyNext}
+            </button>
+          </div>
+        </>
+      )}
+
+      {walletStep === 2 && (
+        <>
+          <div className="small">{t.walletSeedStep2}</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+            {[0, 1].map((col) => (
+              <div key={col} style={{ display: 'grid', gap: '8px' }}>
+                {Array.from({ length: 12 }, (_, row) => {
+                  const slot = col * 12 + row;
+                  const wordIndex = verifyOrder[slot] ?? slot;
+                  return (
+                    <div
+                      key={slot}
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: '72px 1fr',
+                        gap: '8px',
+                        alignItems: 'center',
+                      }}
+                    >
+                      <div className="small" style={{ opacity: 0.85, textAlign: 'right', paddingRight: '2px' }}>
+                        {t.walletSeedWord} {wordIndex + 1}
+                      </div>
+                      <input
+                        value={verifyInputs[slot] ?? ''}
+                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                          const v = e.target.value;
+                          setVerifyInputs((prev) => {
+                            const next = [...prev];
+                            next[slot] = v;
+                            return next;
+                          });
+                        }}
+                        disabled={busy}
+                        style={seedWordInputStyle}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+
+          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+            <button
+              onClick={() => {
+                setWalletStep(1);
+              }}
+              disabled={busy}
+              style={{
+                padding: '10px 12px',
+                borderRadius: '6px',
+                border: '1px solid #22262A',
+                background: 'rgba(204, 204, 220, 0.08)',
+                color: 'rgb(204, 204, 220)',
+                cursor: busy ? 'not-allowed' : 'pointer',
+              }}
+            >
+              {t.walletBack}
+            </button>
+
+            <button
+              onClick={() => {
+                setVerifyMsg('');
+                const answers = verifyInputs.map((w) => w.trim().toLowerCase());
+                const missing = answers.filter((w) => w.length === 0).length;
+                if (missing > 0) {
+                  setVerified(false);
+                  setVerifyMsg(t.walletSeedFillAll);
+                  return;
+                }
+
+                let wrong = 0;
+                for (let slot = 0; slot < 24; slot++) {
+                  const idx = verifyOrder[slot] ?? slot;
+                  if ((answers[slot] ?? '') !== (seedFixed[idx] ?? '')) {
+                    wrong++;
+                  }
+                }
+
+                if (wrong > 0) {
+                  setVerified(false);
+                  setVerifyMsg(`${t.walletSeedWrongWords}: ${wrong}`);
+                  return;
+                }
+
+                setVerified(true);
+                setVerifyMsg(t.walletSeedConfirmed);
+                setWalletStep(3);
+              }}
+              disabled={busy || !seedReady}
+              style={actionButtonStyle}
+            >
+              {t.walletSeedVerifyFinish}
+            </button>
+          </div>
+
+          {verifyMsg && <div className="small">{verifyMsg}</div>}
+        </>
+      )}
+
+      {walletStep === 3 && (
+        <>
+          <div className="small">{t.walletSeedStep3}</div>
+          <div className="small">{t.walletSeedConfirmedLabel}: {verified ? t.ok : 'no'}</div>
+
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: '24px 1fr',
+              gap: '10px',
+              alignItems: 'start',
+              padding: '12px',
+              borderRadius: '8px',
+              border: '1px solid rgba(245, 158, 11, 0.55)',
+              background: 'rgba(245, 158, 11, 0.12)',
+              color: 'rgb(255, 226, 168)',
+            }}
+          >
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path
+                d="M12 3.2 1.9 20.8c-.3.5.1 1.2.7 1.2h18.8c.6 0 1-.7.7-1.2L12 3.2Z"
+                fill="rgba(245, 158, 11, 0.95)"
+              />
+              <path d="M12 8.2v6.6" stroke="#111217" strokeWidth="2" strokeLinecap="round" />
+              <path d="M12 17.8h.01" stroke="#111217" strokeWidth="3" strokeLinecap="round" />
+            </svg>
+
+            <div style={{ display: 'grid', gap: '6px' }}>
+              <div style={{ fontWeight: 700 }}>{t.walletHotwalletWarningTitle}</div>
+              <div className="small" style={{ color: 'rgb(255, 226, 168)' }}>
+                {t.walletHotwalletWarning1}
+              </div>
+              <div className="small" style={{ color: 'rgb(255, 226, 168)' }}>
+                {t.walletHotwalletWarning2}
+              </div>
+              <div className="small" style={{ color: 'rgb(255, 226, 168)' }}>
+                {t.walletHotwalletWarning3}
+              </div>
+              <div className="small" style={{ color: 'rgb(255, 226, 168)' }}>
+                {t.walletHotwalletWarning4}
+              </div>
+            </div>
+          </div>
+
+          <div className="small">{t.walletPasswordLabel}</div>
+          <input
+            value={walletPassword}
+            type={walletPasswordVisible ? 'text' : 'password'}
+            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setWalletPassword(e.target.value)}
+            disabled={busy}
+            style={{
+              padding: '10px',
+              borderRadius: '6px',
+              border: '1px solid #22262A',
+              background: '#0B0C0E',
+              color: 'rgb(204, 204, 220)',
+            }}
+          />
+
+          <label className="small" style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <input
+              type="checkbox"
+              checked={walletPasswordVisible}
+              onChange={(e) => setWalletPasswordVisible(e.target.checked)}
+              disabled={busy}
+            />
+            {t.walletShowPassphrase}
+          </label>
+
+          <div className="small">{t.validatorsPassphraseConfirm}</div>
+          <input
+            value={walletPasswordConfirm}
+            type={walletPasswordVisible ? 'text' : 'password'}
+            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setWalletPasswordConfirm(e.target.value)}
+            disabled={busy}
+            style={{
+              padding: '10px',
+              borderRadius: '6px',
+              border: '1px solid #22262A',
+              background: '#0B0C0E',
+              color: 'rgb(204, 204, 220)',
+            }}
+          />
+
+          {walletPassTooShort && (
+            <div className="small" style={{ color: 'rgb(248, 113, 113)' }}>
+              {t.validatorsPassphraseMinLen}
+            </div>
+          )}
+          {walletPassMismatch && (
+            <div className="small" style={{ color: 'rgb(248, 113, 113)' }}>
+              {t.validatorsPassphraseMismatch}
+            </div>
+          )}
+          {walletPassOk && (
+            <div className="small" style={{ color: 'rgb(134, 239, 172)' }}>
+              {t.walletPassphraseOk}
+            </div>
+          )}
+          <div className="small" style={{ color: 'rgba(204, 204, 220, 0.7)' }}>
+            {t.walletPassphraseHint}
+          </div>
+
+          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+            <button
+              onClick={() => {
+                setWalletStep(2);
+              }}
+              disabled={busy}
+              style={{
+                padding: '10px 12px',
+                borderRadius: '6px',
+                border: '1px solid #22262A',
+                background: 'rgba(204, 204, 220, 0.08)',
+                color: 'rgb(204, 204, 220)',
+                cursor: busy ? 'not-allowed' : 'pointer',
+              }}
+            >
+              {t.walletBack}
+            </button>
+
+            <button
+              onClick={() =>
+                void (async () => {
+                  try {
+                    setBusy(true);
+                    setMsg(`${t.walletCreating}...`);
+                    const w = await walletCreate({
+                      wallet_name: walletName,
+                      hrp,
+                      mnemonic,
+                      password: walletPassword,
+                    });
+                    onCreated(w);
+                    setMsg(`${t.walletCreated}: ${w.address ?? ''}`);
+                    setMnemonicWords(Array.from({ length: 24 }, () => ''));
+                    setWalletStep(1);
+                  } catch (e: unknown) {
+                    setMsg(`${t.error}: ${String(e)}`);
+                  } finally {
+                    setBusy(false);
+                  }
+                })()
+              }
+              disabled={busy || !verified || !seedReady || !walletPassOk || !isTauri}
+              style={{
+                ...actionButtonStyle,
+                background: verified && walletPassOk ? '#131619' : 'rgba(204, 204, 220, 0.08)',
+              }}
+              title={!isTauri ? t.tauriOnly : ''}
+            >
+              {t.walletCreateButton}
+            </button>
+          </div>
+        </>
+      )}
+
+      {msg && <div className="small">{msg}</div>}
+    </div>
+  );
+}
+
+function LineChart({ t, inbound, outbound }: { t: number[]; inbound: number[]; outbound: number[] }): JSX.Element {
+  const { t: texts } = useI18n();
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const plotRef = useRef<uPlot | null>(null);
+  const roRef = useRef<ResizeObserver | null>(null);
+  const hoverIdxRef = useRef<number | null>(null);
+  const [showInbound, setShowInbound] = useState(true);
+  const [showOutbound, setShowOutbound] = useState(true);
+  const [hover, setHover] = useState<{
+    active: boolean;
+    ts: number | null;
+    inbound: number | null;
+    outbound: number | null;
+    left: number;
+    top: number;
+  }>({
+    active: false,
+    ts: null,
+    inbound: null,
+    outbound: null,
+    left: 0,
+    top: 0,
+  });
+
+  const inboundFill = useMemo(
+    () => (u: uPlot): CanvasRenderingContext2D['fillStyle'] => {
+      const top = u.bbox?.top;
+      const height = u.bbox?.height;
+      if (!Number.isFinite(top) || !Number.isFinite(height) || height <= 0) {
+        return 'rgba(87, 148, 242, 0.10)';
+      }
+      const gradient = u.ctx.createLinearGradient(0, top, 0, top + height);
+      gradient.addColorStop(0, 'rgba(87, 148, 242, 0.18)');
+      gradient.addColorStop(0.55, 'rgba(87, 148, 242, 0.08)');
+      gradient.addColorStop(1, 'rgba(87, 148, 242, 0)');
+      return gradient;
+    },
+    [],
+  );
+
+  const outboundFill = useMemo(
+    () => (u: uPlot): CanvasRenderingContext2D['fillStyle'] => {
+      const top = u.bbox?.top;
+      const height = u.bbox?.height;
+      if (!Number.isFinite(top) || !Number.isFinite(height) || height <= 0) {
+        return 'rgba(184, 119, 248, 0.10)';
+      }
+      const gradient = u.ctx.createLinearGradient(0, top, 0, top + height);
+      gradient.addColorStop(0, 'rgba(184, 119, 248, 0.18)');
+      gradient.addColorStop(0.55, 'rgba(184, 119, 248, 0.08)');
+      gradient.addColorStop(1, 'rgba(184, 119, 248, 0)');
+      return gradient;
+    },
+    [],
+  );
+
+  const opts: uPlot.Options = useMemo(
+    () => ({
+      width: 1,
+      height: 1,
+      padding: [8, 12, 8, 8],
+      legend: { show: false },
+      scales: { x: { time: true }, y: { auto: true } },
+      cursor: {
+        x: true,
+        y: false,
+        drag: { x: false, y: false, setScale: false },
+        points: {
+          show: true,
+          size: 6,
+          width: 1,
+          stroke: '#0B0C0E',
+          fill: 'rgba(204, 204, 220, 0.95)',
+        },
+      },
+      axes: [
+        {
+          stroke: 'rgba(204, 204, 220, 0.45)',
+          grid: { stroke: 'rgba(204, 204, 220, 0.06)', width: 1 },
+          ticks: { stroke: 'rgba(204, 204, 220, 0.14)' },
+        },
+        {
+          stroke: 'rgba(204, 204, 220, 0.45)',
+          grid: { stroke: 'rgba(204, 204, 220, 0.06)', width: 1 },
+          ticks: { stroke: 'rgba(204, 204, 220, 0.14)' },
+        },
+      ],
+      series: [
+        {
+          label: 'Time',
+          value: (_u: uPlot, v: number | null) => (v === null ? '' : new Date(v * 1000).toLocaleTimeString()),
+        },
+        { label: 'Inbound/s', stroke: '#5794F2', width: GRAFANA_LINE_WIDTH, fill: inboundFill },
+        { label: 'Outbound/s', stroke: '#B877F8', width: GRAFANA_LINE_WIDTH, fill: outboundFill },
+      ],
+      hooks: {
+        setCursor: [
+          (u) => {
+            const idx = u.cursor.idx;
+            if (idx == null || idx < 0) {
+              if (hoverIdxRef.current !== null) {
+                hoverIdxRef.current = null;
+                setHover((prev) => (prev.active ? { ...prev, active: false } : prev));
+              }
+              return;
+            }
+            if (hoverIdxRef.current === idx) {
+              const ts = (u.data[0]?.[idx] as number | null | undefined) ?? null;
+              const inRate = (u.data[1]?.[idx] as number | null | undefined) ?? null;
+              const outRate = (u.data[2]?.[idx] as number | null | undefined) ?? null;
+              setHover((prev) => ({
+                ...prev,
+                ts,
+                inbound: inRate,
+                outbound: outRate,
+                left: u.cursor.left ?? 0,
+                top: u.cursor.top ?? 0,
+              }));
+              return;
+            }
+            hoverIdxRef.current = idx;
+            const ts = (u.data[0]?.[idx] as number | null | undefined) ?? null;
+            const inRate = (u.data[1]?.[idx] as number | null | undefined) ?? null;
+            const outRate = (u.data[2]?.[idx] as number | null | undefined) ?? null;
+            setHover({
+              active: true,
+              ts,
+              inbound: inRate,
+              outbound: outRate,
+              left: u.cursor.left ?? 0,
+              top: u.cursor.top ?? 0,
+            });
+          },
+        ],
+      },
+    }),
+    [inboundFill, outboundFill],
+  );
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || plotRef.current) {
+      return;
+    }
+
+    const plot = new uPlot(
+      {
+        ...opts,
+        width: Math.max(1, el.clientWidth),
+        height: Math.max(1, el.clientHeight),
+      },
+      [[], [], []],
+      el,
+    );
+
+    plotRef.current = plot;
+
+    const ro = new ResizeObserver(() => {
+      plot.setSize({ width: Math.max(1, el.clientWidth), height: Math.max(1, el.clientHeight) });
+    });
+    ro.observe(el);
+    roRef.current = ro;
+
+    return () => {
+      ro.disconnect();
+      plot.destroy();
+      roRef.current = null;
+      plotRef.current = null;
+    };
+  }, [opts]);
+
+  useEffect(() => {
+    plotRef.current?.setData([t, inbound, outbound]);
+    if (t.length === 0) {
+      hoverIdxRef.current = null;
+      setHover({ active: false, ts: null, inbound: null, outbound: null, left: 0, top: 0 });
+    } else if (hover.active && hoverIdxRef.current !== null && hoverIdxRef.current < t.length) {
+      const idx = hoverIdxRef.current;
+      setHover((prev) => ({
+        ...prev,
+        ts: t[idx] ?? null,
+        inbound: inbound[idx] ?? null,
+        outbound: outbound[idx] ?? null,
+      }));
+    } else if (!hover.active) {
+      setHover((prev) => ({
+        ...prev,
+        ts: t[t.length - 1] ?? null,
+        inbound: inbound[inbound.length - 1] ?? null,
+        outbound: outbound[outbound.length - 1] ?? null,
+      }));
+    }
+  }, [t, inbound, outbound]);
+
+  useEffect(() => {
+    const plot = plotRef.current;
+    if (!plot) {
+      return;
+    }
+    plot.setSeries(1, { show: showInbound });
+    plot.setSeries(2, { show: showOutbound });
+  }, [showInbound, showOutbound]);
+
+  const hasData = t.length > 0;
+  const latestTs = hasData ? (t[t.length - 1] ?? null) : null;
+  const latestInbound = hasData && showInbound ? (inbound[inbound.length - 1] ?? null) : null;
+  const latestOutbound = hasData && showOutbound ? (outbound[outbound.length - 1] ?? null) : null;
+  const activeTs = hover.active ? hover.ts : latestTs;
+  const activeInbound = showInbound ? (hover.active ? hover.inbound : latestInbound) : null;
+  const activeOutbound = showOutbound ? (hover.active ? hover.outbound : latestOutbound) : null;
+  const plotOffsetTop = containerRef.current?.offsetTop ?? 0;
+  const plotOffsetLeft = containerRef.current?.offsetLeft ?? 0;
+
+  return (
+    <div className="chart-frame">
+      <div className="chart-meta">
+        <div className="chart-time">{formatChartTime(activeTs)}</div>
+        <div className="chart-legend">
+          <button type="button" className={`chart-legend-item${showInbound ? '' : ' off'}`} onClick={() => setShowInbound((v) => !v)}>
+            <span className="chart-legend-swatch inbound" />
+            <span className="chart-legend-label">{texts.statInboundRate}</span>
+            <span className="chart-legend-value">{formatByteRate(activeInbound)}</span>
+          </button>
+          <button type="button" className={`chart-legend-item${showOutbound ? '' : ' off'}`} onClick={() => setShowOutbound((v) => !v)}>
+            <span className="chart-legend-swatch outbound" />
+            <span className="chart-legend-label">{texts.statOutboundRate}</span>
+            <span className="chart-legend-value">{formatByteRate(activeOutbound)}</span>
+          </button>
+        </div>
+      </div>
+      <div ref={containerRef} className="chart-plot" style={{ height: '208px' }} />
+      {hasData && hover.active && (
+        <div
+          className="chart-tooltip"
+          style={{
+            left: Math.max(10, Math.min(plotOffsetLeft + hover.left + 20, plotOffsetLeft + (containerRef.current?.clientWidth ?? 0) - 156)),
+            top: Math.max(plotOffsetTop + 12, plotOffsetTop + hover.top + 18),
+          }}
+        >
+          <div className="chart-tooltip-time">{formatChartTime(activeTs)}</div>
+          {showInbound && (
+            <div className="chart-tooltip-row">
+              <span className="chart-tooltip-key"><span className="chart-legend-swatch inbound" />{texts.statInboundRate}</span>
+              <span className="chart-tooltip-val">{formatByteRate(activeInbound)}</span>
+            </div>
+          )}
+          {showOutbound && (
+            <div className="chart-tooltip-row">
+              <span className="chart-tooltip-key"><span className="chart-legend-swatch outbound" />{texts.statOutboundRate}</span>
+              <span className="chart-tooltip-val">{formatByteRate(activeOutbound)}</span>
+            </div>
+          )}
+        </div>
+      )}
+      {!hasData && <div className="chart-empty">{texts.noData}</div>}
+    </div>
+  );
+}
+
+function GaugeCanvas({ value, min, max, label, formatFn }: { value: number | null; min: number; max: number; label?: string; formatFn?: (v: number) => string }): JSX.Element {
+  const ref = useRef<HTMLCanvasElement | null>(null);
+
+  useEffect(() => {
+    const c = ref.current;
+    if (!c) {
+      return;
+    }
+    renderGauge(c, value, min, max, label, formatFn);
+  }, [value, min, max, label, formatFn]);
+
+  useEffect(() => {
+    const c = ref.current;
+    if (!c) {
+      return;
+    }
+    const on = () => renderGauge(c, value, min, max, label, formatFn);
+    window.addEventListener('resize', on);
+    return () => window.removeEventListener('resize', on);
+  }, [value, min, max, label, formatFn]);
+
+  return <canvas className="canvas" ref={ref} style={{ width: '100%', height: '140px' }} />;
+}
+
+function HeatmapCanvas({ rowLabels, columns }: { rowLabels: string[]; columns: number[][] }): JSX.Element {
+  const { t: texts } = useI18n();
+  const ref = useRef<HTMLCanvasElement | null>(null);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const [hover, setHover] = useState<{
+    active: boolean;
+    x: number;
+    y: number;
+    rowLabel: string;
+    value: number;
+    sample: number;
+  }>({
+    active: false,
+    x: 0,
+    y: 0,
+    rowLabel: '',
+    value: 0,
+    sample: 0,
+  });
+
+  useEffect(() => {
+    const c = ref.current;
+    if (!c) {
+      return;
+    }
+    renderHeatmap(c, rowLabels, columns);
+  }, [rowLabels, columns]);
+
+  useEffect(() => {
+    const c = ref.current;
+    if (!c) {
+      return;
+    }
+    const on = () => renderHeatmap(c, rowLabels, columns);
+    window.addEventListener('resize', on);
+    return () => window.removeEventListener('resize', on);
+  }, [rowLabels, columns]);
+
+  const hasData = rowLabels.length > 0 && columns.length > 0;
+
+  return (
+    <div
+      ref={wrapRef}
+      className="chart-frame"
+      onMouseMove={(e) => {
+        const c = ref.current;
+        const wrap = wrapRef.current;
+        if (!c || !wrap || !hasData) {
+          return;
+        }
+        const rect = c.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        const layout = computeHeatmapLayout(c.clientWidth, c.clientHeight, rowLabels, columns);
+        if (!layout) {
+          setHover((prev) => (prev.active ? { ...prev, active: false } : prev));
+          return;
+        }
+        const { rows, drawCols, startCol, x0, y0, cellW, cellH, rowGap } = layout;
+        const localX = x - x0;
+        const localY = y - y0;
+        if (localX < 0 || localY < 0) {
+          setHover((prev) => (prev.active ? { ...prev, active: false } : prev));
+          return;
+        }
+        const colIdx = Math.floor(localX / cellW);
+        const rowIdx = Math.floor(localY / (cellH + rowGap));
+        if (colIdx < 0 || colIdx >= drawCols.length || rowIdx < 0 || rowIdx >= rows) {
+          setHover((prev) => (prev.active ? { ...prev, active: false } : prev));
+          return;
+        }
+        if (localY % (cellH + rowGap) > cellH) {
+          setHover((prev) => (prev.active ? { ...prev, active: false } : prev));
+          return;
+        }
+        const bucketIdx = rows - 1 - rowIdx;
+        const value = drawCols[colIdx][bucketIdx] ?? 0;
+        setHover({
+          active: true,
+          x: e.clientX - wrap.getBoundingClientRect().left + 12,
+          y: e.clientY - wrap.getBoundingClientRect().top + 12,
+          rowLabel: rowLabels[bucketIdx] ?? '',
+          value,
+          sample: startCol + colIdx + 1,
+        });
+      }}
+      onMouseLeave={() => setHover((prev) => (prev.active ? { ...prev, active: false } : prev))}
+    >
+      <canvas className="canvas" ref={ref} style={{ width: '100%', height: '160px' }} />
+      {hasData && hover.active && (
+        <div
+          className="chart-tooltip"
+          style={{
+            left: Math.max(10, Math.min(hover.x, (wrapRef.current?.clientWidth ?? 0) - 150)),
+            top: Math.max(18, Math.min(hover.y, (wrapRef.current?.clientHeight ?? 0) - 72)),
+          }}
+        >
+          <div className="chart-tooltip-time">{hover.rowLabel}</div>
+          <div className="chart-tooltip-val">{formatInt(hover.value)}</div>
+        </div>
+      )}
+      {!hasData && <div className="chart-empty">{texts.noData}</div>}
+    </div>
+  );
+}
+
+function ConnectionSettingsDialog({
+  open,
+  cfg,
+  onClose,
+  onApply,
+  walletName,
+}: {
+  open: boolean;
+  cfg: AppConfig;
+  onClose: () => void;
+  onApply: (c: AppConfig) => void;
+  walletName: string;
+}): JSX.Element | null {
+  const { t, locale, setLocale } = useI18n();
+  const [tab, setTab] = useState<'connection' | 'node' | 'bitbox' | 'wallet'>('connection');
+  const [statusUrl, setStatusUrl] = useState(cfg.statusUrl);
+  const [metricsPrimary, setMetricsPrimary] = useState(cfg.metricsUrlPrimary);
+  const [metricsFallback, setMetricsFallback] = useState(cfg.metricsUrlFallback);
+  const [token, setToken] = useState(cfg.bearerToken);
+  const [bitboxTransport, setBitboxTransport] = useState(cfg.bitboxTransport);
+  const [bitboxBridgeUrl, setBitboxBridgeUrl] = useState(cfg.bitboxBridgeUrl);
+  const [nodeLocalAddr, setNodeLocalAddr] = useState(cfg.nodeLocalAddr);
+  const [nodeStoreDir, setNodeStoreDir] = useState(cfg.nodeStoreDir);
+  const [nodeP2PListenAddr, setNodeP2PListenAddr] = useState(cfg.nodeP2PListenAddr);
+  const [nodeP2PPublicConfirm, setNodeP2PPublicConfirm] = useState(cfg.nodeP2PPublicConfirm);
+  const [nodeBootstrapPeers, setNodeBootstrapPeers] = useState<BootstrapPeer[]>(
+    cfg.nodeBootstrapPeers.length > 0 ? cfg.nodeBootstrapPeers : [{ addr: '', certFile: '' }],
+  );
+  const [nodeBackupTarget, setNodeBackupTarget] = useState(cfg.nodeBackupTarget);
+  const [nodeTxProposer, setNodeTxProposer] = useState(cfg.nodeTxProposer);
+  const [nodePowMiner, setNodePowMiner] = useState(cfg.nodePowMiner);
+  const [nodeValidatorId, setNodeValidatorId] = useState(cfg.nodeValidatorId);
+  const [nodeBlsPk, setNodeBlsPk] = useState(cfg.nodeBlsPk);
+  const [nodeMintAmount, setNodeMintAmount] = useState(cfg.nodeMintAmount);
+  const [nodeMintLock, setNodeMintLock] = useState(cfg.nodeMintLock);
+  const [nodeOverrideValidatorControl, setNodeOverrideValidatorControl] = useState(cfg.nodeOverrideValidatorControl);
+  const [bootstrapPeersPath, setBootstrapPeersPath] = useState<string>('');
+  const [msg, setMsg] = useState<string>('');
+  const [busy, setBusy] = useState(false);
+  const [genesisResetDialogOpen, setGenesisResetDialogOpen] = useState(false);
+  const [genesisResetConfirmText, setGenesisResetConfirmText] = useState('');
+  const [genesisResetToken, setGenesisResetToken] = useState('');
+  const [genesisResetReadyAtMs, setGenesisResetReadyAtMs] = useState(0);
+  const [genesisResetNowMs, setGenesisResetNowMs] = useState(() => Date.now());
+  const [genesisResetNetworkId, setGenesisResetNetworkId] = useState('');
+  const [wBackupDstS, setWBackupDstS] = useState<string>('');
+  const [wRestoreSrcS, setWRestoreSrcS] = useState<string>('');
+  const [wRestoreForceS, setWRestoreForceS] = useState<boolean>(false);
+  const [wBackupMsgS, setWBackupMsgS] = useState<string>('');
+  const [csvFromDateS, setCsvFromDateS] = useState<string>('');
+  const [csvToDateS, setCsvToDateS] = useState<string>('');
+  const [csvExportMsgS, setCsvExportMsgS] = useState<string>('');
+  const [csvExportingS, setCsvExportingS] = useState(false);
+  const GENESIS_RESET_CONFIRM_TEXT = 'GENESIS RESET VERSTEHE ICH';
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    setTab('connection');
+    setStatusUrl(cfg.statusUrl);
+    setMetricsPrimary(cfg.metricsUrlPrimary);
+    setMetricsFallback(cfg.metricsUrlFallback);
+    setToken(cfg.bearerToken);
+    setBitboxTransport(cfg.bitboxTransport);
+    setBitboxBridgeUrl(cfg.bitboxBridgeUrl);
+    setNodeLocalAddr(cfg.nodeLocalAddr);
+    setNodeStoreDir(cfg.nodeStoreDir);
+    setNodeP2PListenAddr(cfg.nodeP2PListenAddr);
+    setNodeP2PPublicConfirm(cfg.nodeP2PPublicConfirm);
+    setNodeBootstrapPeers(cfg.nodeBootstrapPeers.length > 0 ? cfg.nodeBootstrapPeers : [{ addr: '', certFile: '' }]);
+    setNodeBackupTarget(cfg.nodeBackupTarget);
+    setNodeTxProposer(cfg.nodeTxProposer);
+    setNodePowMiner(cfg.nodePowMiner);
+    setNodeValidatorId(cfg.nodeValidatorId);
+    setNodeBlsPk(cfg.nodeBlsPk);
+    setNodeMintAmount(cfg.nodeMintAmount);
+    setNodeMintLock(cfg.nodeMintLock);
+    setNodeOverrideValidatorControl(cfg.nodeOverrideValidatorControl);
+    setBootstrapPeersPath('');
+    setGenesisResetDialogOpen(false);
+    setGenesisResetConfirmText('');
+    setGenesisResetToken('');
+    setGenesisResetReadyAtMs(0);
+    setGenesisResetNowMs(Date.now());
+    setGenesisResetNetworkId('');
+    setMsg('');
+    setBusy(false);
+  }, [open, cfg]);
+
+  useEffect(() => {
+    if (!genesisResetDialogOpen || !genesisResetToken) {
+      return;
+    }
+    const id = window.setInterval(() => setGenesisResetNowMs(Date.now()), 250);
+    return () => window.clearInterval(id);
+  }, [genesisResetDialogOpen, genesisResetToken]);
+
+  const buildNextCfg = (): AppConfig => {
+    const peers = nodeBootstrapPeers
+      .map((p) => ({ addr: p.addr.trim(), certFile: p.certFile.trim() }))
+      .filter((p) => p.addr || p.certFile);
+    return {
+      statusUrl: statusUrl.trim(),
+      metricsUrlPrimary: metricsPrimary.trim(),
+      metricsUrlFallback: metricsFallback.trim(),
+      bearerToken: token.trim(),
+      bitboxTransport: bitboxTransport.trim(),
+      bitboxBridgeUrl: bitboxBridgeUrl.trim(),
+      nodeLocalAddr: nodeLocalAddr.trim(),
+      nodeStoreDir: nodeStoreDir.trim(),
+      nodeP2PListenAddr: nodeP2PListenAddr.trim(),
+      nodeP2PPublicConfirm,
+      nodeBootstrapPeers: peers,
+      nodeBackupTarget: nodeBackupTarget.trim(),
+      nodeTxProposer,
+      nodePowMiner,
+      nodeValidatorId: nodeValidatorId.trim(),
+      nodeBlsPk: nodeBlsPk.trim(),
+      nodeMintAmount: nodeMintAmount.trim(),
+      nodeMintLock: nodeMintLock.trim(),
+      nodeOverrideValidatorControl,
+    };
+  };
+
+  const connectWithCfg = async (next: AppConfig) => {
+    try {
+      setBusy(true);
+      setMsg('Teste Verbindung ...');
+      const s = await fetchStatus(next);
+      if (!s.ok) {
+        setMsg('Status sagt: ok=false');
+        return;
+      }
+      await fetchMetrics(next);
+      saveAppConfig(next);
+      onApply(next);
+      setMsg('');
+      onClose();
+    } catch (e: unknown) {
+      setMsg(`${t.error}: ${String(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onConnect = async () => {
+    const next = buildNextCfg();
+    await connectWithCfg(next);
+  };
+
+  const onAutoFind = async () => {
+    try {
+      setBusy(true);
+      setMsg('Suche laufende Phantom-Ports ...');
+      const found = await tryDetectEndpoints(token.trim());
+      if (!found) {
+        setMsg('Nichts gefunden. Phantom muss laufen und /status + /metrics erreichbar sein.');
+        return;
+      }
+
+      setStatusUrl(found.statusUrl);
+      setMetricsPrimary(found.metricsUrlPrimary);
+      setMetricsFallback(found.metricsUrlFallback);
+
+      await connectWithCfg({ ...buildNextCfg(), statusUrl: found.statusUrl, metricsUrlPrimary: found.metricsUrlPrimary, metricsUrlFallback: found.metricsUrlFallback });
+    } catch (e: unknown) {
+      setMsg(`${t.error}: ${String(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onSave = () => {
+    const next = buildNextCfg();
+    saveAppConfig(next);
+    flushSync(() => {
+      onApply(next);
+    });
+    setMsg('');
+    onClose();
+  };
+
+  const loadBootstrapPeersFromDisk = async () => {
+    const storeDir = nodeStoreDir.trim();
+    if (!storeDir) {
+      setMsg(`${t.error}: store_dir empty`);
+      return;
+    }
+    try {
+      setBusy(true);
+      setMsg(`${t.settingsLoad} bootstrap_peers.json...`);
+      const resp = await bridgeBootstrapPeersLoad(storeDir);
+      setBootstrapPeersPath(resp.path);
+      const peers = (Array.isArray(resp.peers) ? resp.peers : [])
+        .map((p) => ({
+          addr: String((p as any)?.addr ?? '').trim(),
+          certFile: String((p as any)?.cert_file ?? '').trim(),
+        }))
+        .filter((p) => p.addr || p.certFile);
+      setNodeBootstrapPeers(peers.length > 0 ? peers : [{ addr: '', certFile: '' }]);
+      setMsg(`${t.settingsBootstrapPeers}: ${peers.length}`);
+    } catch (e: unknown) {
+      setMsg(`${t.error}: ${String(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveBootstrapPeersToDisk = async () => {
+    const storeDir = nodeStoreDir.trim();
+    if (!storeDir) {
+      setMsg(`${t.error}: store_dir empty`);
+      return;
+    }
+    try {
+      setBusy(true);
+      setMsg(`${t.save} bootstrap_peers.json...`);
+      const peers = nodeBootstrapPeers
+        .map((p) => ({ addr: p.addr.trim(), cert_file: p.certFile.trim() }))
+        .filter((p) => p.addr || p.cert_file);
+      const resp = await bridgeBootstrapPeersSave(storeDir, peers);
+      setBootstrapPeersPath(resp.path);
+      setMsg(`bootstrap_peers.json ✓ (${resp.peers_written})`);
+    } catch (e: unknown) {
+      setMsg(`${t.error}: ${String(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const tabBtnStyle = (active: boolean): React.CSSProperties => ({
+    padding: '8px 10px',
+    borderRadius: '8px',
+    border: '1px solid #22262A',
+    background: active ? 'rgba(110, 159, 255, 0.12)' : 'rgba(204, 204, 220, 0.06)',
+    color: active ? 'rgb(204, 204, 220)' : 'rgba(204, 204, 220, 0.75)',
+    cursor: busy ? 'not-allowed' : 'pointer',
+    fontSize: '12px',
+    fontWeight: 600,
+    letterSpacing: '0.2px',
+  });
+
+  const pickDerFile = async (): Promise<string | null> => {
+    if (!isTauri) {
+      return null;
+    }
+    const { open } = await import('@tauri-apps/api/dialog');
+    const sel = await open({
+      multiple: false,
+      filters: [{ name: 'DER', extensions: ['der'] }],
+    });
+    if (typeof sel === 'string') return sel;
+    if (Array.isArray(sel) && sel.length > 0 && typeof sel[0] === 'string') return sel[0];
+    return null;
+  };
+
+  const pickDir = async (): Promise<string | null> => {
+    if (!isTauri) {
+      return null;
+    }
+    const { open } = await import('@tauri-apps/api/dialog');
+    const sel = await open({ directory: true, multiple: false });
+    if (typeof sel === 'string') return sel;
+    if (Array.isArray(sel) && sel.length > 0 && typeof sel[0] === 'string') return sel[0];
+    return null;
+  };
+
+  const resetGenesisResetDialog = () => {
+    setGenesisResetConfirmText('');
+    setGenesisResetToken('');
+    setGenesisResetReadyAtMs(0);
+    setGenesisResetNowMs(Date.now());
+    setGenesisResetNetworkId('');
+  };
+
+  const openGenesisResetDialog = () => {
+    resetGenesisResetDialog();
+    setGenesisResetDialogOpen(true);
+  };
+
+  const closeGenesisResetDialog = () => {
+    setGenesisResetDialogOpen(false);
+    resetGenesisResetDialog();
+  };
+
+  const genesisResetCountdownSecs = genesisResetToken
+    ? Math.max(0, Math.ceil((genesisResetReadyAtMs - genesisResetNowMs) / 1000))
+    : 0;
+  const genesisResetCanFinalize =
+    genesisResetToken.length > 0 &&
+    genesisResetConfirmText.trim() === GENESIS_RESET_CONFIRM_TEXT &&
+    genesisResetCountdownSecs <= 0;
+
+  const onGenesisResetPrepare = async () => {
+    const storeDir = nodeStoreDir.trim();
+    if (!storeDir) {
+      setMsg(`${t.error}: store_dir empty`);
+      return;
+    }
+    try {
+      setBusy(true);
+      setMsg(`${t.settingsGenesisResetStep1}...`);
+      const resp = await canonicalGenesisResetPrepare({
+        store_dir: storeDir,
+        confirm_text: genesisResetConfirmText.trim(),
+      });
+      setGenesisResetToken(resp.token);
+      setGenesisResetReadyAtMs(resp.ready_at_unix_ms);
+      setGenesisResetNowMs(Date.now());
+      setGenesisResetNetworkId(resp.network_id);
+      setMsg(`${resp.message} network_id=${resp.network_id}`);
+    } catch (e: unknown) {
+      setMsg(`${t.error}: ${String(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onGenesisResetCommit = async () => {
+    const storeDir = nodeStoreDir.trim();
+    if (!storeDir) {
+      setMsg(`${t.error}: store_dir empty`);
+      return;
+    }
+    if (!genesisResetToken.trim()) {
+      setMsg(`${t.error}: no active genesis reset session`);
+      return;
+    }
+    if (!genesisResetCanFinalize) {
+      setMsg(`${t.error}: countdown or confirm text mismatch`);
+      return;
+    }
+    try {
+      setBusy(true);
+      setMsg(`${t.settingsGenesisResetStep2}...`);
+      const resp = await canonicalGenesisResetCommit({
+        store_dir: storeDir,
+        token: genesisResetToken.trim(),
+      });
+      const purgeInfo = resp.purged_items.length > 0
+        ? ` [purged: ${resp.purged_items.join(', ')}]`
+        : '';
+      setMsg(`${resp.message} network_id=${resp.network_id}${purgeInfo}`);
+      closeGenesisResetDialog();
+    } catch (e: unknown) {
+      setMsg(`${t.error}: ${String(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!open) {
+    return null;
+  }
+
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(0, 0, 0, 0.55)',
+        display: 'grid',
+        placeItems: 'center',
+        zIndex: 50,
+        padding: '12px',
+      }}
+    >
+      <div
+        className="panel"
+        style={{
+          width: '980px',
+          maxWidth: '96vw',
+          maxHeight: '92vh',
+          display: 'flex',
+          flexDirection: 'column',
+        }}
+      >
+        <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', gap: '10px' }}>
+          <div className="panel-title">{t.settingsTitle}</div>
+          <button
+            onClick={onClose}
+            disabled={busy}
+            style={{
+              padding: '6px 10px',
+              borderRadius: '6px',
+              border: '1px solid #22262A',
+              background: 'rgba(204, 204, 220, 0.08)',
+              color: 'rgb(204, 204, 220)',
+              cursor: busy ? 'not-allowed' : 'pointer',
+            }}
+          >
+            {t.close}
+          </button>
+        </div>
+        <div
+          className="panel-body"
+          style={{
+            display: 'grid',
+            gap: '10px',
+            overflowY: 'auto',
+            paddingRight: '4px',
+          }}
+        >
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+            <button onClick={() => setTab('connection')} disabled={busy} style={tabBtnStyle(tab === 'connection')}>
+              {t.settingsTabConnection}
+            </button>
+            <button onClick={() => setTab('node')} disabled={busy} style={tabBtnStyle(tab === 'node')}>
+              {t.settingsTabNode}
+            </button>
+            <button onClick={() => setTab('bitbox')} disabled={busy} style={tabBtnStyle(tab === 'bitbox')}>
+              {t.settingsTabBitbox}
+            </button>
+            <button onClick={() => setTab('wallet')} disabled={busy} style={tabBtnStyle(tab === 'wallet')}>
+              {t.settingsTabWallet}
+            </button>
+            <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <span className="small" style={{ opacity: 0.7 }}>{t.language}:</span>
+              <select
+                value={locale}
+                onChange={(e) => setLocale(e.target.value as Locale)}
+                disabled={busy}
+                style={{
+                  background: '#0B0C0E',
+                  color: 'rgb(204,204,220)',
+                  border: '1px solid rgba(204,204,220,0.2)',
+                  borderRadius: '4px',
+                  padding: '3px 6px',
+                  fontSize: '12px',
+                  cursor: busy ? 'not-allowed' : 'pointer',
+                }}
+              >
+                {(Object.entries(LOCALE_NAMES) as [Locale, string][]).map(([code, name]) => (
+                  <option key={code} value={code}>{name}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {tab === 'connection' && (
+            <>
+              <div className="small">{t.settingsStatusUrl}</div>
+              <input
+                value={statusUrl}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setStatusUrl(e.target.value)}
+                style={{
+                  padding: '10px',
+                  borderRadius: '6px',
+                  border: '1px solid #22262A',
+                  background: '#0B0C0E',
+                  color: 'rgb(204, 204, 220)',
+                }}
+              />
+
+              <div className="small">{t.settingsMetricsPrimary}</div>
+              <input
+                value={metricsPrimary}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setMetricsPrimary(e.target.value)}
+                style={{
+                  padding: '10px',
+                  borderRadius: '6px',
+                  border: '1px solid #22262A',
+                  background: '#0B0C0E',
+                  color: 'rgb(204, 204, 220)',
+                }}
+              />
+
+              <div className="small">{t.settingsMetricsFallback}</div>
+              <input
+                value={metricsFallback}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setMetricsFallback(e.target.value)}
+                style={{
+                  padding: '10px',
+                  borderRadius: '6px',
+                  border: '1px solid #22262A',
+                  background: '#0B0C0E',
+                  color: 'rgb(204, 204, 220)',
+                }}
+              />
+
+              <div className="small">{t.settingsBearerToken}</div>
+              <input
+                value={token}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setToken(e.target.value)}
+                style={{
+                  padding: '10px',
+                  borderRadius: '6px',
+                  border: '1px solid #22262A',
+                  background: '#0B0C0E',
+                  color: 'rgb(204, 204, 220)',
+                }}
+              />
+
+              <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                <button
+                  onClick={() => void onAutoFind()}
+                  disabled={busy}
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: '6px',
+                    border: '1px solid #22262A',
+                    background: 'rgba(204, 204, 220, 0.08)',
+                    color: 'rgb(204, 204, 220)',
+                    cursor: busy ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  {t.settingsAutoDetect}
+                </button>
+
+                <button
+                  onClick={() => void onConnect()}
+                  disabled={busy}
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: '6px',
+                    border: '1px solid #22262A',
+                    background: '#131619',
+                    color: 'rgb(204, 204, 220)',
+                    cursor: busy ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  {t.settingsTabConnection}
+                </button>
+
+                <button
+                  onClick={onSave}
+                  disabled={busy}
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: '6px',
+                    border: '1px solid #22262A',
+                    background: 'rgba(110, 159, 255, 0.14)',
+                    color: 'rgb(204, 204, 220)',
+                    cursor: busy ? 'not-allowed' : 'pointer',
+                  }}
+                  title={t.save}
+                >
+                  {t.save}
+                </button>
+              </div>
+            </>
+          )}
+
+          {tab === 'node' && (
+            <div style={{ display: 'grid', gap: '12px' }}>
+              <div
+                style={{
+                  display: 'grid',
+                  gap: '12px',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))',
+                  alignItems: 'start',
+                }}
+              >
+                <div className="panel" style={{ minHeight: 0 }}>
+                  <div className="panel-header">
+                    <div className="panel-title">{t.settingsNodeBase}</div>
+                  </div>
+                  <div className="panel-body" style={{ display: 'grid', gap: '10px' }}>
+                    <div className="small">{t.settingsNodeLocalAddr}</div>
+                    <input
+                      value={nodeLocalAddr}
+                      onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNodeLocalAddr(e.target.value)}
+                      style={{
+                        padding: '10px',
+                        borderRadius: '6px',
+                        border: '1px solid #22262A',
+                        background: '#0B0C0E',
+                        color: 'rgb(204, 204, 220)',
+                      }}
+                    />
+
+                    <div style={{ display: 'flex', alignItems: 'end', gap: '10px', flexWrap: 'wrap' }}>
+                      <div style={{ flex: 1, minWidth: 260 }}>
+                        <div className="small">{t.settingsNodeStoreDir}</div>
+                        <input
+                          value={nodeStoreDir}
+                          onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNodeStoreDir(e.target.value)}
+                          style={{
+                            width: '100%',
+                            padding: '10px',
+                            borderRadius: '6px',
+                            border: '1px solid #22262A',
+                            background: '#0B0C0E',
+                            color: 'rgb(204, 204, 220)',
+                          }}
+                        />
+                      </div>
+                      <button
+                        onClick={() => void pickDir().then((p) => p && setNodeStoreDir(p))}
+                        disabled={busy || !isTauri}
+                        style={{
+                          padding: '10px 12px',
+                          borderRadius: '6px',
+                          border: '1px solid #22262A',
+                          background: 'rgba(204, 204, 220, 0.08)',
+                          color: 'rgb(204, 204, 220)',
+                          cursor: busy ? 'not-allowed' : isTauri ? 'pointer' : 'not-allowed',
+                        }}
+                        title={t.settingsChooseDir}
+                      >
+                        {t.settingsChooseDir}
+                      </button>
+                    </div>
+
+                    <div className="small">{t.settingsNodeP2PAddr}</div>
+                    <input
+                      value={nodeP2PListenAddr}
+                      onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNodeP2PListenAddr(e.target.value)}
+                      style={{
+                        padding: '10px',
+                        borderRadius: '6px',
+                        border: '1px solid #22262A',
+                        background: '#0B0C0E',
+                        color: 'rgb(204, 204, 220)',
+                      }}
+                    />
+
+                    <label className="small" style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                      <input
+                        type="checkbox"
+                        checked={nodeP2PPublicConfirm}
+                        onChange={(e) => setNodeP2PPublicConfirm(e.target.checked)}
+                        disabled={busy}
+                      />
+                      {t.settingsNodeP2PPublic}
+                    </label>
+
+                    <div style={{ marginTop: '6px', display: 'grid', gap: '6px', padding: '8px 10px', borderRadius: '6px', border: '1px solid #22262A', background: 'rgba(204, 204, 220, 0.04)' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span className="small">{t.kpiStatusServeAddr}</span>
+                        <span className="small" style={{ color: 'rgb(204, 204, 220)' }}>{hostPortFromUrl(cfg.statusUrl) ?? '-'}</span>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span className="small">{t.kpiStatusHttpAddr}</span>
+                        <span className="small" style={{ color: 'rgb(204, 204, 220)' }}>{cfg.nodeLocalAddr}</span>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span className="small">{t.kpiMintRpcAddr}</span>
+                        <span className="small" style={{ color: 'rgb(204, 204, 220)' }}>127.0.0.1:19090</span>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span className="small">{t.kpiMetricsAddr}</span>
+                        <span className="small" style={{ color: 'rgb(204, 204, 220)' }}>{hostPortFromUrl(cfg.metricsUrlPrimary) ?? hostPortFromUrl(cfg.metricsUrlFallback) ?? '-'}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="panel" style={{ minHeight: 0 }}>
+                  <div className="panel-header">
+                    <div className="panel-title">{t.settingsGenesisRoles}</div>
+                  </div>
+                  <div className="panel-body" style={{ display: 'grid', gap: '8px' }}>
+                    <label className="small" style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                      <input
+                        type="checkbox"
+                        checked={nodeTxProposer}
+                        onChange={(e) => setNodeTxProposer(e.target.checked)}
+                        disabled={busy}
+                      />
+                      {t.settingsEnableTxProposer}
+                    </label>
+                    <label className="small" style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                      <input
+                        type="checkbox"
+                        checked={nodePowMiner}
+                        onChange={(e) => setNodePowMiner(e.target.checked)}
+                        disabled={busy}
+                      />
+                      {t.settingsEnablePowMiner}
+                    </label>
+                    <label className="small" style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                      <input
+                        type="checkbox"
+                        checked={nodeOverrideValidatorControl}
+                        onChange={(e) => setNodeOverrideValidatorControl(e.target.checked)}
+                        disabled={busy}
+                      />
+                      {t.settingsValidatorControlOverride}
+                    </label>
+
+                    {nodeTxProposer && (
+                      <>
+                        <div className="small">{t.settingsValidatorId}</div>
+                        <input
+                          value={nodeValidatorId}
+                          onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNodeValidatorId(e.target.value)}
+                          style={{
+                            padding: '10px',
+                            borderRadius: '6px',
+                            border: '1px solid #22262A',
+                            background: '#0B0C0E',
+                            color: 'rgb(204, 204, 220)',
+                          }}
+                        />
+                        <div className="small">{t.settingsBlsPubKey}</div>
+                        <input
+                          value={nodeBlsPk}
+                          onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNodeBlsPk(e.target.value)}
+                          style={{
+                            padding: '10px',
+                            borderRadius: '6px',
+                            border: '1px solid #22262A',
+                            background: '#0B0C0E',
+                            color: 'rgb(204, 204, 220)',
+                          }}
+                        />
+                      </>
+                    )}
+
+                    {nodePowMiner && (
+                      <>
+                        <div className="small">{t.settingsMintAmount}</div>
+                        <input
+                          value={nodeMintAmount}
+                          onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNodeMintAmount(e.target.value)}
+                          placeholder="auto"
+                          style={{
+                            padding: '10px',
+                            borderRadius: '6px',
+                            border: '1px solid #22262A',
+                            background: '#0B0C0E',
+                            color: 'rgb(204, 204, 220)',
+                          }}
+                        />
+                        <div className="small">{t.settingsMintLock}</div>
+                        <input
+                          value={nodeMintLock}
+                          onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNodeMintLock(e.target.value)}
+                          style={{
+                            padding: '10px',
+                            borderRadius: '6px',
+                            border: '1px solid #22262A',
+                            background: '#0B0C0E',
+                            color: 'rgb(204, 204, 220)',
+                          }}
+                        />
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="panel" style={{ minHeight: 0 }}>
+                <div
+                  className="panel-header"
+                  style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}
+                >
+                  <div>
+                    <div className="panel-title">{t.settingsBootstrapPeers}</div>
+                    {bootstrapPeersPath && <div className="small">{t.settingsFile}: {bootstrapPeersPath}</div>}
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                    <button
+                      onClick={() => void loadBootstrapPeersFromDisk()}
+                      disabled={busy || !isTauri}
+                      style={{
+                        padding: '6px 12px',
+                        borderRadius: '6px',
+                        border: '1px solid #22262A',
+                        background: 'rgba(204, 204, 220, 0.08)',
+                        color: 'rgb(204, 204, 220)',
+                        cursor: busy ? 'not-allowed' : isTauri ? 'pointer' : 'not-allowed',
+                        fontSize: '12px',
+                      }}
+                      title={t.settingsLoad}
+                    >
+                      {t.settingsLoad}
+                    </button>
+
+                    <button
+                      onClick={() => void saveBootstrapPeersToDisk()}
+                      disabled={busy || !isTauri}
+                      style={{
+                        padding: '6px 12px',
+                        borderRadius: '6px',
+                        border: '1px solid #22262A',
+                        background: 'rgba(204, 204, 220, 0.08)',
+                        color: 'rgb(204, 204, 220)',
+                        cursor: busy ? 'not-allowed' : isTauri ? 'pointer' : 'not-allowed',
+                        fontSize: '12px',
+                      }}
+                      title={t.save}
+                    >
+                      {t.save}
+                    </button>
+
+                    <button
+                      onClick={() => setNodeBootstrapPeers([...nodeBootstrapPeers, { addr: '', certFile: '' }])}
+                      disabled={busy}
+                      style={{
+                        padding: '6px 12px',
+                        borderRadius: '6px',
+                        border: '1px solid #22262A',
+                        background: 'rgba(204, 204, 220, 0.08)',
+                        color: 'rgb(204, 204, 220)',
+                        cursor: busy ? 'not-allowed' : 'pointer',
+                        fontSize: '12px',
+                      }}
+                    >
+                      {t.settingsAddPeer}
+                    </button>
+                  </div>
+                </div>
+                <div className="panel-body" style={{ padding: 0, overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <thead>
+                      <tr>
+                        <th style={{ textAlign: 'left', padding: '8px 10px', borderBottom: '1px solid #22262A', color: 'rgba(204, 204, 220, 0.65)', fontSize: '11px', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                          {t.settingsPeerAddress}
+                        </th>
+                        <th style={{ textAlign: 'left', padding: '8px 10px', borderBottom: '1px solid #22262A', color: 'rgba(204, 204, 220, 0.65)', fontSize: '11px', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                          {t.settingsPeerCert}
+                        </th>
+                        <th style={{ width: 140, padding: '8px 10px', borderBottom: '1px solid #22262A' }} />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {nodeBootstrapPeers.length === 0 && (
+                        <tr>
+                          <td colSpan={3} style={{ padding: '10px', color: 'rgba(204, 204, 220, 0.65)' }}>
+                            {t.settingsNoPeers}
+                          </td>
+                        </tr>
+                      )}
+                      {nodeBootstrapPeers.map((p, idx) => (
+                        <tr key={idx} style={{ background: idx % 2 === 0 ? 'transparent' : 'rgba(204, 204, 220, 0.02)' }}>
+                          <td style={{ padding: '6px 10px', borderBottom: '1px solid rgba(204, 204, 220, 0.06)' }}>
+                            <input
+                              value={p.addr}
+                              onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                                const next = [...nodeBootstrapPeers];
+                                next[idx] = { ...next[idx], addr: e.target.value };
+                                setNodeBootstrapPeers(next);
+                              }}
+                              style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #22262A', background: '#0B0C0E', color: 'rgb(204, 204, 220)' }}
+                            />
+                          </td>
+                          <td style={{ padding: '6px 10px', borderBottom: '1px solid rgba(204, 204, 220, 0.06)' }}>
+                            <div style={{ display: 'flex', gap: '8px' }}>
+                              <input
+                                value={p.certFile}
+                                onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                                  const next = [...nodeBootstrapPeers];
+                                  next[idx] = { ...next[idx], certFile: e.target.value };
+                                  setNodeBootstrapPeers(next);
+                                }}
+                                style={{ flex: 1, padding: '8px', borderRadius: '6px', border: '1px solid #22262A', background: '#0B0C0E', color: 'rgb(204, 204, 220)' }}
+                              />
+                              <button
+                                onClick={() =>
+                                  void pickDerFile().then((f) => {
+                                    if (!f) return;
+                                    const next = [...nodeBootstrapPeers];
+                                    next[idx] = { ...next[idx], certFile: f };
+                                    setNodeBootstrapPeers(next);
+                                  })
+                                }
+                                disabled={busy || !isTauri}
+                                style={{
+                                  padding: '8px 10px',
+                                  borderRadius: '6px',
+                                  border: '1px solid #22262A',
+                                  background: 'rgba(204, 204, 220, 0.08)',
+                                  color: 'rgb(204, 204, 220)',
+                                  cursor: busy ? 'not-allowed' : isTauri ? 'pointer' : 'not-allowed',
+                                  fontSize: '12px',
+                                }}
+                                title={t.settingsFile}
+                              >
+                                {t.settingsFile}
+                              </button>
+                            </div>
+                          </td>
+                          <td style={{ padding: '6px 10px', borderBottom: '1px solid rgba(204, 204, 220, 0.06)', textAlign: 'right' }}>
+                            <button
+                              onClick={() => setNodeBootstrapPeers(nodeBootstrapPeers.filter((_, i) => i !== idx))}
+                              disabled={busy}
+                              style={{
+                                padding: '8px 10px',
+                                borderRadius: '6px',
+                                border: '1px solid #22262A',
+                                background: 'rgba(209, 14, 92, 0.12)',
+                                color: 'rgb(204, 204, 220)',
+                                cursor: busy ? 'not-allowed' : 'pointer',
+                                fontSize: '12px',
+                              }}
+                            >
+                              {t.settingsRemove}
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div
+                style={{
+                  display: 'grid',
+                  gap: '12px',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
+                  alignItems: 'start',
+                }}
+              >
+                <div className="panel" style={{ minHeight: 0 }}>
+                  <div className="panel-header">
+                    <div className="panel-title">{t.settingsBackup}</div>
+                  </div>
+                  <div className="panel-body" style={{ display: 'grid', gap: '10px' }}>
+                    <div style={{ display: 'flex', alignItems: 'end', gap: '10px', flexWrap: 'wrap' }}>
+                      <div style={{ flex: 1, minWidth: 260 }}>
+                        <div className="small">{t.settingsBackupTarget}</div>
+                        <input
+                          value={nodeBackupTarget}
+                          onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNodeBackupTarget(e.target.value)}
+                          style={{
+                            width: '100%',
+                            padding: '10px',
+                            borderRadius: '6px',
+                            border: '1px solid #22262A',
+                            background: '#0B0C0E',
+                            color: 'rgb(204, 204, 220)',
+                          }}
+                        />
+                      </div>
+                      <button
+                        onClick={() => void pickDir().then((p) => p && setNodeBackupTarget(p))}
+                        disabled={busy || !isTauri}
+                        style={{
+                          padding: '10px 12px',
+                          borderRadius: '6px',
+                          border: '1px solid #22262A',
+                          background: 'rgba(204, 204, 220, 0.08)',
+                          color: 'rgb(204, 204, 220)',
+                          cursor: busy ? 'not-allowed' : isTauri ? 'pointer' : 'not-allowed',
+                        }}
+                        title={t.settingsChooseDir}
+                      >
+                        {t.settingsChooseDir}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="panel" style={{ minHeight: 0 }}>
+                  <div className="panel-header">
+                    <div className="panel-title">{t.settingsActions}</div>
+                  </div>
+                  <div className="panel-body" style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                    <button
+                      onClick={openGenesisResetDialog}
+                      disabled={busy || !isTauri}
+                      style={{
+                        padding: '10px 12px',
+                        borderRadius: '6px',
+                        border: '1px solid rgba(255, 138, 99, 0.45)',
+                        background: 'rgba(209, 14, 92, 0.12)',
+                        color: 'rgb(204, 204, 220)',
+                        cursor: busy ? 'not-allowed' : isTauri ? 'pointer' : 'not-allowed',
+                      }}
+                      title={t.settingsGenesisResetActivate}
+                    >
+                      {t.settingsGenesisResetActivate}
+                    </button>
+                    <button
+                      onClick={onSave}
+                      disabled={busy}
+                      style={{
+                        padding: '10px 12px',
+                        borderRadius: '6px',
+                        border: '1px solid #22262A',
+                        background: 'rgba(110, 159, 255, 0.14)',
+                        color: 'rgb(204, 204, 220)',
+                        cursor: busy ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      {t.save}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {tab === 'bitbox' && (
+            <>
+              <div className="small">Transport</div>
+              <select
+                value={bitboxTransport}
+                onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setBitboxTransport(e.target.value)}
+                disabled={busy}
+                style={{
+                  padding: '10px',
+                  borderRadius: '6px',
+                  border: '1px solid #22262A',
+                  background: '#0B0C0E',
+                  color: 'rgb(204, 204, 220)',
+                }}
+              >
+                <option value="auto">auto</option>
+                <option value="usb">usb</option>
+                <option value="bridge">bridge</option>
+              </select>
+
+              <div className="small">Bridge URL</div>
+              <input
+                value={bitboxBridgeUrl}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setBitboxBridgeUrl(e.target.value)}
+                disabled={busy}
+                style={{
+                  padding: '10px',
+                  borderRadius: '6px',
+                  border: '1px solid #22262A',
+                  background: '#0B0C0E',
+                  color: 'rgb(204, 204, 220)',
+                }}
+              />
+
+              <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                <button
+                  onClick={() =>
+                    void (async () => {
+                      try {
+                        setBusy(true);
+                        setMsg(`${t.settingsBridgeCheck}...`);
+                        const out = await bitboxBridgeStatus({ transport: bitboxTransport, bridge_url: bitboxBridgeUrl });
+                        setMsg(String(out));
+                      } catch (e: unknown) {
+                        setMsg(`${t.error}: ${String(e)}`);
+                      } finally {
+                        setBusy(false);
+                      }
+                    })()
+                  }
+                  disabled={busy || !isTauri}
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: '6px',
+                    border: '1px solid #22262A',
+                    background: 'rgba(204, 204, 220, 0.08)',
+                    color: 'rgb(204, 204, 220)',
+                    cursor: busy ? 'not-allowed' : isTauri ? 'pointer' : 'not-allowed',
+                  }}
+                  title={t.settingsBridgeCheck}
+                >
+                  {t.settingsBridgeCheck}
+                </button>
+
+                <button
+                  onClick={onSave}
+                  disabled={busy}
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: '6px',
+                    border: '1px solid #22262A',
+                    background: 'rgba(110, 159, 255, 0.14)',
+                    color: 'rgb(204, 204, 220)',
+                    cursor: busy ? 'not-allowed' : 'pointer',
+                  }}
+                  title={t.save}
+                >
+                  {t.save}
+                </button>
+              </div>
+            </>
+          )}
+
+          {tab === 'wallet' && (
+            <div style={{ display: 'grid', gap: '12px' }}>
+              <div className="small" style={{ color: 'rgba(204, 204, 220, 0.65)' }}>
+                Wallet: <strong>{walletName}</strong>
+              </div>
+
+              <div className="small">{t.settingsBackupTarget}</div>
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                <input
+                  value={wBackupDstS}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setWBackupDstS(e.target.value)}
+                  disabled={busy}
+                  style={{
+                    flex: 1,
+                    minWidth: 220,
+                    padding: '10px',
+                    borderRadius: '6px',
+                    border: '1px solid #22262A',
+                    background: '#0B0C0E',
+                    color: 'rgb(204, 204, 220)',
+                  }}
+                />
+                <button
+                  onClick={() =>
+                    void (async () => {
+                      if (!isTauri) return;
+                      const { open } = await import('@tauri-apps/api/dialog');
+                      const sel = await open({ directory: true, multiple: false });
+                      if (typeof sel === 'string') setWBackupDstS(sel);
+                    })()
+                  }
+                  disabled={busy || !isTauri}
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: '6px',
+                    border: '1px solid #22262A',
+                    background: 'rgba(204, 204, 220, 0.08)',
+                    color: 'rgb(204, 204, 220)',
+                    cursor: busy ? 'not-allowed' : isTauri ? 'pointer' : 'not-allowed',
+                  }}
+                  title={t.settingsChooseDir}
+                >
+                  {t.settingsChooseDir}
+                </button>
+              </div>
+
+              <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                <button
+                  onClick={() =>
+                    void (async () => {
+                      try {
+                        setBusy(true);
+                        setWBackupMsgS('');
+                        const dst = wBackupDstS.trim();
+                        if (!dst) {
+                          setWBackupMsgS(`${t.error}: backup_dir empty`);
+                          return;
+                        }
+                        const resp = await walletBackupToDir({ wallet_name: walletName, dst_dir: dst });
+                        setWBackupMsgS(resp.ok ? `Backup: ${resp.backup_dir}` : t.nodeBackupFailed);
+                      } catch (e) {
+                        setWBackupMsgS(`${t.error}: ${String(e)}`);
+                      } finally {
+                        setBusy(false);
+                      }
+                    })()
+                  }
+                  disabled={busy || !isTauri}
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: '6px',
+                    border: '1px solid #22262A',
+                    background: 'rgba(110, 159, 255, 0.14)',
+                    color: 'rgb(204, 204, 220)',
+                    cursor: busy ? 'not-allowed' : isTauri ? 'pointer' : 'not-allowed',
+                  }}
+                >
+                  {t.settingsCreateBackup}
+                </button>
+              </div>
+
+              <div style={{ marginTop: '8px', borderTop: '1px solid rgba(204, 204, 220, 0.08)', paddingTop: '12px' }}>
+                <div className="small">{t.settingsRestoreSource}</div>
+              </div>
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                <input
+                  value={wRestoreSrcS}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setWRestoreSrcS(e.target.value)}
+                  disabled={busy}
+                  style={{
+                    flex: 1,
+                    minWidth: 220,
+                    padding: '10px',
+                    borderRadius: '6px',
+                    border: '1px solid #22262A',
+                    background: '#0B0C0E',
+                    color: 'rgb(204, 204, 220)',
+                  }}
+                />
+                <button
+                  onClick={() =>
+                    void (async () => {
+                      if (!isTauri) return;
+                      const { open } = await import('@tauri-apps/api/dialog');
+                      const sel = await open({ directory: true, multiple: false });
+                      if (typeof sel === 'string') setWRestoreSrcS(sel);
+                    })()
+                  }
+                  disabled={busy || !isTauri}
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: '6px',
+                    border: '1px solid #22262A',
+                    background: 'rgba(204, 204, 220, 0.08)',
+                    color: 'rgb(204, 204, 220)',
+                    cursor: busy ? 'not-allowed' : isTauri ? 'pointer' : 'not-allowed',
+                  }}
+                  title={t.settingsChooseDir}
+                >
+                  {t.settingsChooseDir}
+                </button>
+              </div>
+
+              <label className="small" style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <input type="checkbox" checked={wRestoreForceS} onChange={(e) => setWRestoreForceS(e.target.checked)} disabled={busy} />
+                {t.settingsForceOverwrite}
+              </label>
+
+              <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                <button
+                  onClick={() =>
+                    void (async () => {
+                      try {
+                        setBusy(true);
+                        setWBackupMsgS('');
+                        const src = wRestoreSrcS.trim();
+                        if (!src) {
+                          setWBackupMsgS(`${t.error}: restore_dir empty`);
+                          return;
+                        }
+                        await walletRestoreFromDir({ wallet_name: walletName, src_dir: src, force: wRestoreForceS });
+                        setWBackupMsgS('Restore ✓');
+                      } catch (e) {
+                        setWBackupMsgS(`${t.error}: ${String(e)}`);
+                      } finally {
+                        setBusy(false);
+                      }
+                    })()
+                  }
+                  disabled={busy || !isTauri}
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: '6px',
+                    border: '1px solid #22262A',
+                    background: '#131619',
+                    color: 'rgb(204, 204, 220)',
+                    cursor: busy ? 'not-allowed' : isTauri ? 'pointer' : 'not-allowed',
+                  }}
+                >
+                  {t.settingsRestore}
+                </button>
+              </div>
+
+              {wBackupMsgS && (
+                <div className="small" style={{ color: wBackupMsgS.startsWith(t.error) ? '#d10e5c' : 'rgba(204, 204, 220, 0.75)' }}>
+                  {wBackupMsgS}
+                </div>
+              )}
+
+              <div style={{ marginTop: '8px', borderTop: '1px solid rgba(204, 204, 220, 0.08)', paddingTop: '12px' }}>
+                <div style={{
+                  background: 'rgba(110, 159, 255, 0.04)',
+                  border: '1px solid rgba(110, 159, 255, 0.15)',
+                  borderRadius: '8px',
+                  padding: '12px 14px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '10px',
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span className="small" style={{ color: 'rgba(204, 204, 220, 0.75)', fontWeight: 600 }}>CSV-Export</span>
+                    {isTauri && (
+                      <button
+                        className="btn btn-sm"
+                        style={{ fontSize: '11px', padding: '3px 10px' }}
+                        onClick={async () => {
+                          try { await walletHistoryCsvOpenFolder({ wallet_name: walletName }); } catch (e: unknown) { setCsvExportMsgS(String(e)); }
+                        }}
+                      >
+                        {t.settingsOpenFolder}
+                      </button>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                      <span className="small" style={{ color: 'rgba(204, 204, 220, 0.6)' }}>{t.settingsFrom}:</span>
+                      <input
+                        type="date"
+                        value={csvFromDateS}
+                        onChange={(e) => setCsvFromDateS(e.target.value)}
+                        style={{
+                          background: 'rgba(0,0,0,0.25)',
+                          border: '1px solid rgba(204, 204, 220, 0.15)',
+                          borderRadius: '4px',
+                          color: '#cccce0',
+                          padding: '4px 8px',
+                          fontSize: '12px',
+                        }}
+                      />
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                      <span className="small" style={{ color: 'rgba(204, 204, 220, 0.6)' }}>{t.settingsTo}:</span>
+                      <input
+                        type="date"
+                        value={csvToDateS}
+                        onChange={(e) => setCsvToDateS(e.target.value)}
+                        style={{
+                          background: 'rgba(0,0,0,0.25)',
+                          border: '1px solid rgba(204, 204, 220, 0.15)',
+                          borderRadius: '4px',
+                          color: '#cccce0',
+                          padding: '4px 8px',
+                          fontSize: '12px',
+                        }}
+                      />
+                    </label>
+                    <button
+                      className="btn btn-sm"
+                      style={{ fontSize: '11px', padding: '3px 12px' }}
+                      disabled={!csvFromDateS || !csvToDateS || csvExportingS}
+                      onClick={async () => {
+                        if (!csvFromDateS || !csvToDateS) return;
+                        setCsvExportingS(true);
+                        setCsvExportMsgS('');
+                        try {
+                          const fromTs = Math.floor(new Date(csvFromDateS + 'T00:00:00').getTime() / 1000);
+                          const toTs = Math.floor(new Date(csvToDateS + 'T23:59:59').getTime() / 1000);
+                          if (fromTs > toTs) {
+                            setCsvExportMsgS(`${t.error}: from > to`);
+                            return;
+                          }
+                          const csvContent = await walletHistoryCsvRange({ wallet_name: walletName, from_ts: fromTs, to_ts: toTs });
+                          const lines = csvContent.trim().split('\n');
+                          if (lines.length <= 1) {
+                            setCsvExportMsgS(t.settingsCsvNoEvents);
+                            return;
+                          }
+                          const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                          const url = URL.createObjectURL(blob);
+                          const a = document.createElement('a');
+                          a.href = url;
+                          a.download = `wallet_history_${csvFromDateS}_bis_${csvToDateS}.csv`;
+                          document.body.appendChild(a);
+                          a.click();
+                          document.body.removeChild(a);
+                          URL.revokeObjectURL(url);
+                          setCsvExportMsgS(`${lines.length - 1} ${t.settingsCsvExported}`);
+                        } catch (e: unknown) {
+                          setCsvExportMsgS(`${t.error}: ${String(e)}`);
+                        } finally {
+                          setCsvExportingS(false);
+                        }
+                      }}
+                    >
+                      {csvExportingS ? `${t.settingsCsvExporting}...` : t.settingsCsvDownload}
+                    </button>
+                  </div>
+                  {csvExportMsgS && (
+                    <div className="small" style={{ color: csvExportMsgS.startsWith(t.error) ? '#f87171' : 'rgba(204, 204, 220, 0.65)' }}>
+                      {csvExportMsgS}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {genesisResetDialogOpen && (
+            <div
+              style={{
+                position: 'fixed',
+                inset: 0,
+                background: 'rgba(0, 0, 0, 0.65)',
+                display: 'grid',
+                placeItems: 'center',
+                zIndex: 80,
+                padding: '14px',
+              }}
+            >
+              <div
+                className="panel"
+                style={{
+                  width: '700px',
+                  maxWidth: '95vw',
+                  border: '1px solid rgba(255, 138, 99, 0.45)',
+                }}
+              >
+                <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', gap: '10px' }}>
+                  <div className="panel-title">{t.settingsGenesisResetDangerTitle}</div>
+                  <button
+                    onClick={closeGenesisResetDialog}
+                    disabled={busy}
+                    style={{
+                      padding: '6px 10px',
+                      borderRadius: '6px',
+                      border: '1px solid #22262A',
+                      background: 'rgba(204, 204, 220, 0.08)',
+                      color: 'rgb(204, 204, 220)',
+                      cursor: busy ? 'not-allowed' : 'pointer',
+                    }}
+                  >
+                    {t.close}
+                  </button>
+                </div>
+                <div className="panel-body" style={{ display: 'grid', gap: '10px' }}>
+                  <div className="small">
+                    {t.settingsGenesisResetWarning}
+                  </div>
+                  <div className="small">{t.settingsNodeStoreDir}</div>
+                  <input
+                    value={nodeStoreDir}
+                    readOnly
+                    style={{
+                      padding: '10px',
+                      borderRadius: '6px',
+                      border: '1px solid #22262A',
+                      background: '#0B0C0E',
+                      color: 'rgb(204, 204, 220)',
+                    }}
+                  />
+
+                  <div className="small">{t.settingsGenesisResetConfirmLabel}</div>
+                  <input
+                    value={genesisResetConfirmText}
+                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setGenesisResetConfirmText(e.target.value)}
+                    placeholder={GENESIS_RESET_CONFIRM_TEXT}
+                    style={{
+                      padding: '10px',
+                      borderRadius: '6px',
+                      border: '1px solid #22262A',
+                      background: '#0B0C0E',
+                      color: 'rgb(204, 204, 220)',
+                    }}
+                  />
+
+                  {genesisResetNetworkId && (
+                    <div className="small">
+                      {t.settingsGenesisResetNetworkId}: <code>{genesisResetNetworkId}</code>
+                    </div>
+                  )}
+                  {genesisResetToken && (
+                    <div className="small">
+                      Countdown: {genesisResetCountdownSecs > 0 ? `${genesisResetCountdownSecs}s` : t.settingsGenesisResetReady}
+                    </div>
+                  )}
+
+                  <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                    <button
+                      onClick={() => void onGenesisResetPrepare()}
+                      disabled={busy}
+                      style={{
+                        padding: '10px 12px',
+                        borderRadius: '6px',
+                        border: '1px solid #22262A',
+                        background: '#131619',
+                        color: 'rgb(204, 204, 220)',
+                        cursor: busy ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      {t.settingsGenesisResetStep1}
+                    </button>
+                    <button
+                      onClick={() => void onGenesisResetCommit()}
+                      disabled={busy || !genesisResetCanFinalize}
+                      style={{
+                        padding: '10px 12px',
+                        borderRadius: '6px',
+                        border: '1px solid rgba(255, 138, 99, 0.45)',
+                        background: genesisResetCanFinalize ? 'rgba(209, 14, 92, 0.16)' : 'rgba(204, 204, 220, 0.06)',
+                        color: 'rgb(204, 204, 220)',
+                        cursor: busy || !genesisResetCanFinalize ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      {t.settingsGenesisResetStep2}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {msg && <div className="small">{msg}</div>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function shortHex(hex: string, n = 8): string {
+  if (hex.length <= n * 2 + 3) return hex;
+  return `${hex.slice(0, n)}…${hex.slice(-n)}`;
+}
+
+function formatStake(raw: number): string {
+  if (raw === 0) return '0';
+  const pc = raw / 1_000_000;
+  return pc >= 1 ? `${pc.toLocaleString('de-DE', { maximumFractionDigits: 2 })} PC` : `${raw.toLocaleString('de-DE')} sat`;
+}
+
+function ValidatorsTab({
+  cfg,
+  wallet,
+  votes,
+  finality,
+  miner,
+  mintStatus,
+  validators,
+  loading,
+  error,
+  ts,
+  onRefresh,
+}: {
+  cfg: AppConfig;
+  wallet: WalletStatus | null;
+  votes: {
+    sent_total: number | null;
+    accepted_total: number | null;
+    rejected_total: number | null;
+    sent_rate: number | null;
+    accepted_rate: number | null;
+    rejected_rate: number | null;
+  };
+  finality: {
+    avgSec: number | null;
+    eventsTotal: number | null;
+    verifyAvgSec: number | null;
+    verifyCount: number | null;
+    consensusErrors: number | null;
+  };
+  miner: {
+    activeLocalSlots: number | null;
+    activeWorkSlots: number | null;
+    candidateQueuedTotal: number | null;
+    candidateReplacedTotal: number | null;
+    candidateSkippedNotBetterTotal: number | null;
+    candidateScopeResetsTotal: number | null;
+  };
+  mintStatus: MintStatusInfo | null;
+  validators: ValidatorInfo[];
+  loading: boolean;
+  error: string | null;
+  ts: number | null;
+  onRefresh: () => void;
+}): JSX.Element {
+  const { t, locale } = useI18n();
+  useEffect(() => {
+    if (validators.length === 0 && !loading && !error) {
+      onRefresh();
+    }
+  }, []);
+
+  const eligible = validators.filter((v) => v.meets_min_stake);
+  const totalStake = validators.reduce((s, v) => s + v.stake, 0);
+
+  const walletAddr = wallet?.address ?? '';
+  const walletLockHex = wallet?.lock_hex ?? '';
+  const walletCanSpend = wallet?.wallet_kind === 'hot';
+
+  const votesSentPerMin = votes.sent_rate !== null ? votes.sent_rate * 60 : null;
+  const votesAcceptedPerMin = votes.accepted_rate !== null ? votes.accepted_rate * 60 : null;
+  const votesRejectedPerMin = votes.rejected_rate !== null ? votes.rejected_rate * 60 : null;
+
+  const [vBusy, setVBusy] = useState(false);
+  const [vMsg, setVMsg] = useState('');
+  const [vPass, setVPass] = useState('');
+  const [vPassConfirm, setVPassConfirm] = useState('');
+  const [vForce, setVForce] = useState(false);
+  const [vUseRole, setVUseRole] = useState(false);
+  const [vBls, setVBls] = useState<ValidatorBlsInfoResp | null>(null);
+
+  const [vUtxos, setVUtxos] = useState<WalletUtxoResp | null>(null);
+  const [vSel, setVSel] = useState<Record<string, boolean>>({});
+  const [vOperatorId, setVOperatorId] = useState('');
+  const [vAnchorUtxo, setVAnchorUtxo] = useState('');
+
+  const thStyle: React.CSSProperties = {
+    textAlign: 'left',
+    padding: '8px 10px',
+    borderBottom: '1px solid #22262A',
+    color: 'rgba(204, 204, 220, 0.65)',
+    fontSize: '11px',
+    fontWeight: 500,
+    textTransform: 'uppercase',
+    letterSpacing: '0.5px',
+  };
+  const tdStyle: React.CSSProperties = {
+    padding: '6px 10px',
+    borderBottom: '1px solid rgba(204, 204, 220, 0.06)',
+    fontSize: '13px',
+    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+  };
+
+  const selectedOutpoints = Object.entries(vSel)
+    .filter(([, on]) => on)
+    .map(([k]) => k);
+
+  const stakedOutpoints = vUtxos
+    ? vUtxos.utxos.filter((u) => u.staked).map((u) => `${u.txid}:${u.vout}`)
+    : [];
+
+  return (
+    <div style={{ display: 'grid', gap: '12px' }}>
+      <div className="grid-4">
+        <div className="stat">
+          <div className="stat-label">{t.validatorsTitle}</div>
+          <div className="stat-value">{validators.length}</div>
+        </div>
+        <div className="stat">
+          <div className="stat-label">{t.validatorsEligible}</div>
+          <div className="stat-value">{eligible.length}</div>
+        </div>
+        <div className="stat">
+          <div className="stat-label">{t.validatorsTotalStake}</div>
+          <div className="stat-value">{formatStake(totalStake)}</div>
+        </div>
+        <div className="stat">
+          <div className="stat-label">{t.validatorsMinStake}</div>
+          <div className="stat-value">{validators.length > 0 ? formatStake(validators[0].min_stake) : '—'}</div>
+        </div>
+      </div>
+
+      <div className="grid-4">
+        <div className="stat">
+          <div className="stat-label">{t.validatorsVotesSent}</div>
+          <div className="stat-value">{formatInt(votes.sent_total)}</div>
+        </div>
+        <div className="stat">
+          <div className="stat-label">{t.validatorsVotesAccepted}</div>
+          <div className="stat-value">{formatInt(votes.accepted_total)}</div>
+        </div>
+        <div className="stat">
+          <div className="stat-label">{t.validatorsVotesRejected}</div>
+          <div className="stat-value">{formatInt(votes.rejected_total)}</div>
+        </div>
+        <div className="stat">
+          <div className="stat-label">{t.validatorsVotesPerMin}</div>
+          <div className="stat-value">
+            {votesSentPerMin === null || votesAcceptedPerMin === null || votesRejectedPerMin === null
+              ? t.noData
+              : `${votesSentPerMin.toFixed(1)} / ${votesAcceptedPerMin.toFixed(1)} / ${votesRejectedPerMin.toFixed(1)}`}
+          </div>
+        </div>
+      </div>
+
+      <div className="panel">
+        <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <div className="panel-title">{t.validatorsList}<PanelInfo text={t.infoValidatorsList} /></div>
+            {ts && <div className="small">{t.validatorsAsOf}: {new Date(ts * 1000).toLocaleTimeString('de-DE')}</div>}
+          </div>
+          <button
+            onClick={onRefresh}
+            disabled={loading}
+            style={{
+              padding: '6px 12px',
+              borderRadius: '6px',
+              border: '1px solid #22262A',
+              background: 'rgba(204, 204, 220, 0.08)',
+              color: 'rgb(204, 204, 220)',
+              cursor: loading ? 'wait' : 'pointer',
+              fontSize: '12px',
+            }}
+          >
+            {loading ? t.loading : t.validatorsRefresh}
+          </button>
+        </div>
+        <div className="panel-body" style={{ padding: 0, overflowX: 'auto' }}>
+          {error && (
+            <div style={{ padding: '12px', color: '#d10e5c' }}>
+              {t.error}: {error}
+            </div>
+          )}
+          {!error && validators.length === 0 && !loading && (
+            <div style={{ padding: '12px', color: 'rgba(204, 204, 220, 0.65)' }}>
+              {t.validatorsNoneFound}
+            </div>
+          )}
+          {validators.length > 0 && (
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr>
+                  <th style={thStyle}>#</th>
+                  <th style={thStyle}>Validator ID</th>
+                  <th style={thStyle}>Operator</th>
+                  <th style={thStyle}>Stake</th>
+                  <th style={thStyle}>UTXOs</th>
+                  <th style={thStyle}>BLS PoP</th>
+                  <th style={thStyle}>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {validators
+                  .slice()
+                  .sort((a, b) => b.stake - a.stake)
+                  .map((v, i) => (
+                    <tr key={v.validator_id} style={{ background: i % 2 === 0 ? 'transparent' : 'rgba(204, 204, 220, 0.02)' }}>
+                      <td style={tdStyle}>{i + 1}</td>
+                      <td style={tdStyle} title={v.validator_id}>{shortHex(v.validator_id)}</td>
+                      <td style={tdStyle} title={v.operator_id}>{shortHex(v.operator_id)}</td>
+                      <td style={tdStyle}>{formatStake(v.stake)}</td>
+                      <td style={tdStyle}>{v.utxo_count}</td>
+                      <td style={tdStyle}>
+                        <span style={{ color: v.bls_pop_valid ? '#1a7f4b' : '#d10e5c' }}>
+                          {v.bls_pop_valid ? 'valid' : 'invalid'}
+                        </span>
+                      </td>
+                      <td style={tdStyle}>
+                        <span
+                          style={{
+                            padding: '2px 8px',
+                            borderRadius: '4px',
+                            fontSize: '11px',
+                            fontWeight: 600,
+                            background: v.meets_min_stake ? 'rgba(26, 127, 75, 0.15)' : 'rgba(209, 14, 92, 0.15)',
+                            color: v.meets_min_stake ? '#1a7f4b' : '#d10e5c',
+                          }}
+                        >
+                          {v.meets_min_stake ? 'eligible' : 'insufficient'}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+
+      {/* Consensus & Finality */}
+      <div className="panel">
+        <div className="panel-header">
+          <div className="panel-title">{t.validatorsConsensusTitle}<PanelInfo text={t.infoConsensus} /></div>
+        </div>
+        <div className="panel-body">
+          <div className="kpi-row">
+            <div className="kpi">
+              <div className="kpi-name">{t.validatorsFinalityAvg}</div>
+              <div className="kpi-val">{finality.avgSec !== null ? formatSeconds(finality.avgSec) : '-'}</div>
+            </div>
+            <div className="kpi">
+              <div className="kpi-name">{t.validatorsFinalityEvents}</div>
+              <div className="kpi-val">{formatInt(finality.eventsTotal)}</div>
+            </div>
+            <div className="kpi">
+              <div className="kpi-name">{t.validatorsVerifyAvg}</div>
+              <div className="kpi-val">{finality.verifyAvgSec !== null ? `${(finality.verifyAvgSec * 1000).toFixed(2)} ms` : '-'}</div>
+            </div>
+            <div className="kpi">
+              <div className="kpi-name">{t.validatorsVerifySamples}</div>
+              <div className="kpi-val">{formatInt(finality.verifyCount)}</div>
+            </div>
+            <div className="kpi">
+              <div className="kpi-name">{t.validatorsConsensusErrors}</div>
+              <div className="kpi-val" style={{ color: (finality.consensusErrors ?? 0) > 0 ? '#d10e5c' : '#1a7f4b', fontWeight: 600 }}>
+                {formatInt(finality.consensusErrors)}
+              </div>
+            </div>
+          </div>
+          <div className="kpi-row" style={{ marginTop: '10px' }}>
+            <div className="kpi">
+              <div className="kpi-name">{t.validatorsMintHeight}</div>
+              <div className="kpi-val">{formatInt(mintStatus?.mint_height ?? null)}</div>
+            </div>
+            <div className="kpi">
+              <div className="kpi-name">{t.minerActiveWorkSlots}</div>
+              <div className="kpi-val">{formatInt(miner.activeWorkSlots)}</div>
+            </div>
+            <div className="kpi">
+              <div className="kpi-name">{t.minerCandidatesReplaced}</div>
+              <div className="kpi-val">{formatInt(miner.candidateReplacedTotal)}</div>
+            </div>
+            <div className="kpi">
+              <div className="kpi-name">{t.minerCandidatesSkipped}</div>
+              <div className="kpi-val">{formatInt(miner.candidateSkippedNotBetterTotal)}</div>
+            </div>
+            <div className="kpi">
+              <div className="kpi-name">{t.minerScopeResets}</div>
+              <div className="kpi-val">{formatInt(miner.candidateScopeResetsTotal)}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid-2">
+        <div className="panel">
+          <div className="panel-header">
+            <div className="panel-title">{t.validatorsBlsKeystore}<PanelInfo text={t.infoBlsKeystore} /></div>
+            <div className="small">Store: {cfg.nodeStoreDir}</div>
+          </div>
+          <div className="panel-body" style={{ display: 'grid', gap: '10px' }}>
+            <div className="small">{t.validatorsPassphrase}</div>
+            <input
+              value={vPass}
+              type="password"
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setVPass(e.target.value)}
+              disabled={vBusy}
+              style={{
+                padding: '10px',
+                borderRadius: '6px',
+                border: '1px solid #22262A',
+                background: '#0B0C0E',
+                color: 'rgb(204, 204, 220)',
+              }}
+            />
+
+            <div className="small">Passphrase bestätigen</div>
+            <input
+              value={vPassConfirm}
+              type="password"
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setVPassConfirm(e.target.value)}
+              disabled={vBusy}
+              style={{
+                padding: '10px',
+                borderRadius: '6px',
+                border: '1px solid #22262A',
+                background: '#0B0C0E',
+                color: 'rgb(204, 204, 220)',
+              }}
+            />
+
+            <label className="small" style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <input type="checkbox" checked={vForce} onChange={(e) => setVForce(e.target.checked)} disabled={vBusy} />
+              {t.validatorsForce}
+            </label>
+
+            <label className="small" style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <input type="checkbox" checked={vUseRole} onChange={(e) => setVUseRole(e.target.checked)} disabled={vBusy} />
+              {t.validatorsPassphraseRole}
+            </label>
+
+            <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+              <button
+                onClick={() =>
+                  void (async () => {
+                    try {
+                      setVBusy(true);
+                      setVMsg('');
+                      if (vPass.trim().length < 8) {
+                        setVMsg(`${t.error}: ${t.validatorsPassphraseMinLen}`);
+                        return;
+                      }
+                      if (vPass !== vPassConfirm) {
+                        setVMsg(`${t.error}: ${t.validatorsPassphraseMismatch}`);
+                        return;
+                      }
+                      const resp = await validatorKeygenBls({
+                        store_dir: cfg.nodeStoreDir.trim(),
+                        passphrase: vPass,
+                        force: vForce,
+                        use_passphrase_role: vUseRole,
+                      });
+                      setVBls(resp);
+                      setVMsg(`${t.validatorsBlsKeystore} ✓`);
+                    } catch (e) {
+                      setVMsg(`${t.error}: ${String(e)}`);
+                    } finally {
+                      setVBusy(false);
+                    }
+                  })()
+                }
+                disabled={vBusy || !isTauri}
+                style={{
+                  padding: '10px 12px',
+                  borderRadius: '6px',
+                  border: '1px solid #22262A',
+                  background: '#131619',
+                  color: 'rgb(204, 204, 220)',
+                  cursor: vBusy || !isTauri ? 'not-allowed' : 'pointer',
+                }}
+              >
+                Keygen
+              </button>
+
+              <button
+                onClick={() =>
+                  void (async () => {
+                    try {
+                      setVBusy(true);
+                      setVMsg('');
+                      if (vPass.trim().length < 8) {
+                        setVMsg(`${t.error}: ${t.validatorsPassphraseMinLen}`);
+                        return;
+                      }
+                      const resp = await validatorBlsInfo({
+                        store_dir: cfg.nodeStoreDir.trim(),
+                        passphrase: vPass,
+                        use_passphrase_role: vUseRole,
+                      });
+                      setVBls(resp);
+                      setVMsg('BLS Info ✓');
+                    } catch (e) {
+                      setVMsg(`${t.error}: ${String(e)}`);
+                    } finally {
+                      setVBusy(false);
+                    }
+                  })()
+                }
+                disabled={vBusy || !isTauri}
+                style={{
+                  padding: '10px 12px',
+                  borderRadius: '6px',
+                  border: '1px solid #22262A',
+                  background: 'rgba(204, 204, 220, 0.08)',
+                  color: 'rgb(204, 204, 220)',
+                  cursor: vBusy || !isTauri ? 'not-allowed' : 'pointer',
+                }}
+              >
+                Info refresh
+              </button>
+            </div>
+
+            {vBls && (
+              <div style={{ display: 'grid', gap: '8px' }}>
+                <div className="small">Keystore: {vBls.keystore_location} · {vBls.keystore_path}</div>
+                <div style={{ display: 'grid', gap: '6px' }}>
+                  <div className="small">BLS PK</div>
+                  <textarea
+                    value={vBls.bls_pk}
+                    readOnly
+                    style={{
+                      padding: '10px',
+                      borderRadius: '6px',
+                      border: '1px solid #22262A',
+                      background: '#0B0C0E',
+                      color: 'rgb(204, 204, 220)',
+                      minHeight: '72px',
+                      resize: 'vertical',
+                    }}
+                  />
+                </div>
+                <div style={{ display: 'grid', gap: '6px' }}>
+                  <div className="small">BLS PoP</div>
+                  <textarea
+                    value={vBls.bls_pop}
+                    readOnly
+                    style={{
+                      padding: '10px',
+                      borderRadius: '6px',
+                      border: '1px solid #22262A',
+                      background: '#0B0C0E',
+                      color: 'rgb(204, 204, 220)',
+                      minHeight: '96px',
+                      resize: 'vertical',
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="panel">
+          <div className="panel-header">
+            <div className="panel-title">{t.validatorsStakeBonding}<PanelInfo text={t.infoStakeBonding} /></div>
+            <div className="small">Wallet: {walletAddr ? shortHex(walletAddr, 10) : t.walletLocked}</div>
+          </div>
+          <div className="panel-body" style={{ display: 'grid', gap: '10px' }}>
+            {!walletCanSpend && (
+              <div className="small" style={{ color: 'rgba(204, 204, 220, 0.65)' }}>
+                Dieses Wallet ist Watch-only. Stake-Bonding, Unbonding und Validator-Registrierung bleiben deaktiviert, bis Phantom-Transaktionen per Hardware signiert werden können.
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+              <button
+                onClick={() =>
+                  void (async () => {
+                    try {
+                      setVBusy(true);
+                      setVMsg('');
+                      if (!walletLockHex) {
+                        setVMsg(`${t.error}: ${t.walletLocked}`);
+                        return;
+                      }
+                      const data = await nodeWalletHistory(walletLockHex);
+                      setVUtxos(data);
+                      const sel: Record<string, boolean> = {};
+                      for (const u of data.utxos) {
+                        sel[`${u.txid}:${u.vout}`] = false;
+                      }
+                      setVSel(sel);
+                      setVMsg(`UTXOs ✓ (${data.utxos.length})`);
+                    } catch (e) {
+                      setVMsg(`${t.error}: ${String(e)}`);
+                    } finally {
+                      setVBusy(false);
+                    }
+                  })()
+                }
+                disabled={vBusy || !isTauri || !walletCanSpend}
+                style={{
+                  padding: '10px 12px',
+                  borderRadius: '6px',
+                  border: '1px solid #22262A',
+                  background: 'rgba(204, 204, 220, 0.08)',
+                  color: 'rgb(204, 204, 220)',
+                  cursor: vBusy || !isTauri || !walletCanSpend ? 'not-allowed' : 'pointer',
+                }}
+              >
+                {t.validatorsLoadUtxos}
+              </button>
+
+              <button
+                onClick={() => {
+                  if (!vUtxos) return;
+                  const next: Record<string, boolean> = {};
+                  for (const u of vUtxos.utxos) {
+                    next[`${u.txid}:${u.vout}`] = !u.staked;
+                  }
+                  setVSel(next);
+                }}
+                disabled={vBusy || !vUtxos || !walletCanSpend}
+                style={{
+                  padding: '10px 12px',
+                  borderRadius: '6px',
+                  border: '1px solid #22262A',
+                  background: 'rgba(204, 204, 220, 0.08)',
+                  color: 'rgb(204, 204, 220)',
+                  cursor: vBusy || !vUtxos || !walletCanSpend ? 'not-allowed' : 'pointer',
+                }}
+                title={t.validatorsSelectAllUnstaked}
+              >
+                {t.validatorsSelectAllUnstaked}
+              </button>
+
+              <button
+                onClick={() => {
+                  if (!vUtxos) return;
+                  const next: Record<string, boolean> = {};
+                  for (const u of vUtxos.utxos) {
+                    next[`${u.txid}:${u.vout}`] = !!u.staked;
+                  }
+                  setVSel(next);
+                }}
+                disabled={vBusy || !vUtxos || !walletCanSpend}
+                style={{
+                  padding: '10px 12px',
+                  borderRadius: '6px',
+                  border: '1px solid #22262A',
+                  background: 'rgba(204, 204, 220, 0.08)',
+                  color: 'rgb(204, 204, 220)',
+                  cursor: vBusy || !vUtxos || !walletCanSpend ? 'not-allowed' : 'pointer',
+                }}
+                title={t.validatorsSelectAllStaked}
+              >
+                {t.validatorsSelectAllStaked}
+              </button>
+
+              <button
+                onClick={() => setVSel({})}
+                disabled={vBusy || !walletCanSpend}
+                style={{
+                  padding: '10px 12px',
+                  borderRadius: '6px',
+                  border: '1px solid #22262A',
+                  background: 'rgba(209, 14, 92, 0.12)',
+                  color: 'rgb(204, 204, 220)',
+                  cursor: vBusy || !walletCanSpend ? 'not-allowed' : 'pointer',
+                }}
+              >
+                Clear
+              </button>
+            </div>
+
+            {vUtxos && (
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr>
+                      <th style={thStyle} />
+                      <th style={thStyle}>amount</th>
+                      <th style={thStyle}>staked</th>
+                      <th style={thStyle}>outpoint</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {vUtxos.utxos.map((u, idx) => {
+                      const op = `${u.txid}:${u.vout}`;
+                      const on = !!vSel[op];
+                      return (
+                        <tr key={op} style={{ background: idx % 2 === 0 ? 'transparent' : 'rgba(204, 204, 220, 0.02)' }}>
+                          <td style={{ padding: '6px 10px', borderBottom: '1px solid rgba(204, 204, 220, 0.06)' }}>
+                            <input
+                              type="checkbox"
+                              checked={on}
+                              onChange={(e) => setVSel({ ...vSel, [op]: e.target.checked })}
+                              disabled={vBusy || !walletCanSpend}
+                            />
+                          </td>
+                          <td style={{ padding: '6px 10px', borderBottom: '1px solid rgba(204, 204, 220, 0.06)' }}>{u.amount}</td>
+                          <td style={{ padding: '6px 10px', borderBottom: '1px solid rgba(204, 204, 220, 0.06)' }}>{u.staked ? 'yes' : 'no'}</td>
+                          <td style={{ padding: '6px 10px', borderBottom: '1px solid rgba(204, 204, 220, 0.06)', fontFamily: tdStyle.fontFamily as any, fontSize: '12px' }}>
+                            {op}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+              <button
+                onClick={() =>
+                  void (async () => {
+                    try {
+                      setVBusy(true);
+                      setVMsg('');
+                      if (!walletAddr || !walletLockHex) {
+                        setVMsg(`${t.error}: ${t.walletLocked}`);
+                        return;
+                      }
+                      if (selectedOutpoints.length === 0) {
+                        setVMsg(`${t.error}: ${t.validatorsNoUtxosSelected}`);
+                        return;
+                      }
+                      const resp = await validatorStakeBond({ addr: walletAddr, utxos: selectedOutpoints });
+                      setVMsg(resp.ok ? `OK: ${resp.stdout.trim() || 'stake-bond'}` : `${t.error}: ${resp.stderr.trim() || 'stake-bond failed'}`);
+                    } catch (e) {
+                      setVMsg(`${t.error}: ${String(e)}`);
+                    } finally {
+                      setVBusy(false);
+                    }
+                  })()
+                }
+                disabled={vBusy || !isTauri}
+                style={{
+                  padding: '10px 12px',
+                  borderRadius: '6px',
+                  border: '1px solid #22262A',
+                  background: '#131619',
+                  color: 'rgb(204, 204, 220)',
+                  cursor: vBusy || !isTauri ? 'not-allowed' : 'pointer',
+                }}
+              >
+                Stake bond
+              </button>
+
+              <button
+                onClick={() =>
+                  void (async () => {
+                    try {
+                      setVBusy(true);
+                      setVMsg('');
+                      if (!walletAddr || !walletLockHex) {
+                        setVMsg(`${t.error}: ${t.walletLocked}`);
+                        return;
+                      }
+                      if (selectedOutpoints.length === 0) {
+                        setVMsg(`${t.error}: ${t.validatorsNoUtxosSelected}`);
+                        return;
+                      }
+                      const resp = await validatorStakeUnbond({ addr: walletAddr, utxos: selectedOutpoints });
+                      setVMsg(resp.ok ? `OK: ${resp.stdout.trim() || 'stake-unbond'}` : `${t.error}: ${resp.stderr.trim() || 'stake-unbond failed'}`);
+                    } catch (e) {
+                      setVMsg(`${t.error}: ${String(e)}`);
+                    } finally {
+                      setVBusy(false);
+                    }
+                  })()
+                }
+                disabled={vBusy || !isTauri}
+                style={{
+                  padding: '10px 12px',
+                  borderRadius: '6px',
+                  border: '1px solid #22262A',
+                  background: 'rgba(204, 204, 220, 0.08)',
+                  color: 'rgb(204, 204, 220)',
+                  cursor: vBusy || !isTauri ? 'not-allowed' : 'pointer',
+                }}
+              >
+                Stake unbond
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="panel">
+        <div className="panel-header">
+          <div className="panel-title">{t.validatorsRegister}<PanelInfo text={t.infoValidatorRegister} /></div>
+          <div className="small">Addr: {walletAddr ? shortHex(walletAddr, 10) : t.walletLocked}</div>
+        </div>
+        <div className="panel-body" style={{ display: 'grid', gap: '10px' }}>
+          <div className="small">Anchor UTXO (staked)</div>
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+            <input
+              value={vAnchorUtxo}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setVAnchorUtxo(e.target.value)}
+              disabled={vBusy || !walletCanSpend}
+              style={{
+                flex: 1,
+                minWidth: 260,
+                padding: '10px',
+                borderRadius: '6px',
+                border: '1px solid #22262A',
+                background: '#0B0C0E',
+                color: 'rgb(204, 204, 220)',
+              }}
+            />
+            {stakedOutpoints.length > 0 && (
+              <select
+                value={vAnchorUtxo}
+                onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setVAnchorUtxo(e.target.value)}
+                disabled={vBusy || !walletCanSpend}
+                style={{
+                  padding: '10px',
+                  borderRadius: '6px',
+                  border: '1px solid #22262A',
+                  background: '#0B0C0E',
+                  color: 'rgb(204, 204, 220)',
+                }}
+                title={t.validatorsSelectStakedUtxo}
+              >
+                <option value="">{t.validatorsSelectStakedUtxo}</option>
+                {stakedOutpoints.map((op) => (
+                  <option key={op} value={op}>{op}</option>
+                ))}
+              </select>
+            )}
+          </div>
+
+          <div className="small">Operator ID (optional)</div>
+          <input
+            value={vOperatorId}
+            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setVOperatorId(e.target.value)}
+            disabled={vBusy || !walletCanSpend}
+            style={{
+              padding: '10px',
+              borderRadius: '6px',
+              border: '1px solid #22262A',
+              background: '#0B0C0E',
+              color: 'rgb(204, 204, 220)',
+            }}
+          />
+          <div className="small" style={{ color: 'rgba(204, 204, 220, 0.7)' }}>
+            {t.validatorsRegisterHint}
+          </div>
+
+          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+            <button
+              onClick={() =>
+                void (async () => {
+                  try {
+                    setVBusy(true);
+                    setVMsg('');
+                    if (!walletAddr || !walletLockHex) {
+                      setVMsg(`${t.error}: ${t.walletLocked}`);
+                      return;
+                    }
+                    if (!vAnchorUtxo.trim()) {
+                      setVMsg(`${t.error}: Anchor UTXO`);
+                      return;
+                    }
+                    if (vPass.trim().length < 8) {
+                      setVMsg(`${t.error}: ${t.validatorsPassphraseMinLen}`);
+                      return;
+                    }
+                    const resp = await validatorRegister({
+                      addr: walletAddr,
+                      anchor_utxo: vAnchorUtxo.trim(),
+                      operator_id: vOperatorId.trim() ? vOperatorId.trim() : null,
+                      validator_passphrase: vPass,
+                      use_passphrase_role: vUseRole,
+                    });
+                    setVMsg(resp.ok ? `OK: ${resp.stdout.trim() || 'validator-register'}` : `${t.error}: ${resp.stderr.trim() || 'validator-register failed'}`);
+                  } catch (e) {
+                    setVMsg(`${t.error}: ${String(e)}`);
+                  } finally {
+                    setVBusy(false);
+                  }
+                })()
+              }
+              disabled={vBusy || !isTauri || !walletCanSpend}
+              style={{
+                padding: '10px 12px',
+                borderRadius: '6px',
+                border: '1px solid #22262A',
+                background: 'rgba(110, 159, 255, 0.14)',
+                color: 'rgb(204, 204, 220)',
+                cursor: vBusy || !isTauri || !walletCanSpend ? 'not-allowed' : 'pointer',
+              }}
+            >
+              {t.validatorsRegister}
+            </button>
+          </div>
+
+          {vMsg && (
+            <div className="small" style={{ color: vMsg.startsWith(t.error) ? '#d10e5c' : 'rgba(204, 204, 220, 0.75)' }}>
+              {vMsg}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Dashboard({
+  cfg,
+  onOpenSettings,
+  wallet,
+  onWallet,
+  onApplyCfg,
+}: {
+  cfg: AppConfig;
+  onOpenSettings: () => void;
+  wallet: WalletStatus | null;
+  onWallet: (w: WalletStatus | null) => void;
+  onApplyCfg: (c: AppConfig) => void;
+}): JSX.Element {
+  const { t } = useI18n();
+  const walletName = wallet?.wallet_name ?? 'default';
+  const walletKind = wallet?.wallet_kind ?? null;
+  const walletIsWatchOnly = Boolean(wallet?.watch_only ?? (walletKind === 'bitbox_watch_only'));
+  const walletCanSpend = walletKind === 'hot';
+  const walletAddr = wallet?.address ?? '';
+  const walletLockHex = wallet?.lock_hex ?? '';
+  const [activeTab, setActiveTab] = useState<'node' | 'miner' | 'validators' | 'wallet' | 'logs'>('node');
+  const [validators, setValidators] = useState<ValidatorInfo[]>([]);
+  const [valLoading, setValLoading] = useState(false);
+  const [valError, setValError] = useState<string | null>(null);
+  const [valTs, setValTs] = useState<number | null>(null);
+  const [state, setState] = useState<DashboardState>(() => initState());
+  const stateRef = useRef<DashboardState>(state);
+
+  const [nStatus, setNStatus] = useState<ManagedNodeStatus | null>(null);
+  const [nLogs, setNLogs] = useState<string[]>([]);
+  const [nMsg, setNMsg] = useState<string>('');
+  const [nBusy, setNBusy] = useState(false);
+  const [nValidatorPassphrase, setNValidatorPassphrase] = useState<string>('');
+  const [nUsePassphraseRole, setNUsePassphraseRole] = useState<boolean>(false);
+
+  const [wData, setWData] = useState<WalletUtxoResp | null>(null);
+  const csvWrittenRef = useRef<Set<string>>(new Set());
+  const [wAddrLabel, setWAddrLabel] = useState<string>(() => {
+    try { return localStorage.getItem('pc_addr_label') || ''; } catch { return ''; }
+  });
+  const [wAddrEditing, setWAddrEditing] = useState(false);
+  const [wLastUpdate, setWLastUpdate] = useState<number | null>(null);
+  const [wMsg, setWMsg] = useState<string>('');
+  const [wBusy, setWBusy] = useState(false);
+  const [wUnlockPass, setWUnlockPass] = useState<string>('');
+  const [wAddrs, setWAddrs] = useState<WalletAddrView[]>([]);
+  const [wSendTo, setWSendTo] = useState<string>('');
+  const [wSendAmount, setWSendAmount] = useState<string>('');
+  const [wSendFee, setWSendFee] = useState<string>('0');
+  const [wSendMsg, setWSendMsg] = useState<string>('');
+  const [bbStatus, setBbStatus] = useState<string>('');
+  const [bbFingerprint, setBbFingerprint] = useState<string>('');
+  const [bbXpub, setBbXpub] = useState<string>('');
+  const [bbMsg, setBbMsg] = useState<string>('');
+  const [bbBusy, setBbBusy] = useState<boolean>(false);
+  const [bbWalletName, setBbWalletName] = useState<string>(walletName);
+  const [bbWalletHrp, setBbWalletHrp] = useState<string>((wallet?.hrp ?? 'pc') || 'pc');
+
+  useEffect(() => {
+    if (!wallet?.exists) {
+      setBbWalletName(walletName);
+      setBbWalletHrp((wallet?.hrp ?? 'pc') || 'pc');
+    }
+  }, [wallet?.exists, wallet?.hrp, walletName]);
+
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
+
+  useEffect(() => {
+    let mounted = true;
+
+    const loop = async () => {
+      const s = stateRef.current;
+      const prevOnline = s.online;
+      const prevError = s.lastError;
+      try {
+        await poll(cfg, s);
+        s.lastError = null;
+        if (!prevOnline) {
+          pushLog(s, 'Dashboard polling wiederhergestellt');
+        }
+      } catch (e) {
+        s.online = false;
+        s.lastError = `${e}`;
+        if (prevOnline || prevError !== s.lastError) {
+          pushLog(s, `${t.error}: ${e}`);
+        }
+      }
+
+      if (mounted) {
+        setState({ ...s, logs: [...s.logs], seriesT: [...s.seriesT], seriesInboundRate: [...s.seriesInboundRate], seriesOutboundRate: [...s.seriesOutboundRate], heatmapColumns: [...s.heatmapColumns] });
+      }
+    };
+
+    void loop();
+    const id = window.setInterval(() => {
+      void loop();
+    }, 1000);
+
+    return () => {
+      mounted = false;
+      window.clearInterval(id);
+    };
+  }, [cfg]);
+
+  useEffect(() => {
+    let mounted = true;
+    const minerMetricsUrl = cfg.metricsUrlPrimary || 'http://127.0.0.1:8090/metrics';
+    const mintRpcAddr = nStatus?.mint_rpc_addr ?? '127.0.0.1:19090';
+
+    const loop = async () => {
+      const s = stateRef.current;
+      try {
+        await pollMinerMetrics(minerMetricsUrl, mintRpcAddr, s);
+      } catch {
+        // ignore
+      }
+      if (mounted) {
+        setState((prev) => ({
+          ...prev,
+          minerMetrics: { ...s.minerMetrics },
+          mintStatus: s.mintStatus ? { ...s.mintStatus } : null,
+          minerHashrateSeries: [...s.minerHashrateSeries],
+        }));
+      }
+    };
+
+    void loop();
+    const id = window.setInterval(() => void loop(), 2000);
+    return () => {
+      mounted = false;
+      window.clearInterval(id);
+    };
+  }, [cfg.metricsUrlPrimary, nStatus?.mint_rpc_addr]);
+
+  useEffect(() => {
+    let mounted = true;
+    if (!isTauri || !walletLockHex || !nStatus?.status_http_running) {
+      return () => {
+        mounted = false;
+      };
+    }
+
+    const load = async () => {
+      try {
+        const data = await nodeWalletUtxosByLock(walletLockHex);
+        if (mounted) {
+          setWData((prev) => ({
+            ...data,
+            n_history: data.n_history ?? prev?.n_history,
+            history: data.history ?? prev?.history,
+          }));
+          setWLastUpdate(Date.now());
+        }
+      } catch {
+        // keep last known wData on transient errors
+      }
+    };
+
+    void load();
+    const id = window.setInterval(() => void load(), 1000);
+    return () => {
+      mounted = false;
+      window.clearInterval(id);
+    };
+  }, [walletLockHex, nStatus?.status_http_running]);
+
+  useEffect(() => {
+    let mounted = true;
+    if (!isTauri || !walletLockHex || !nStatus?.status_http_running) {
+      return () => { mounted = false; };
+    }
+    const loadHistory = async () => {
+      try {
+        const data = await nodeWalletHistory(walletLockHex);
+        if (mounted) {
+          setWData((prev) => prev ? { ...prev, n_history: data.n_history, history: data.history } : data);
+        }
+        if (isTauri && Array.isArray(data.history) && data.history.length > 0) {
+          const newEvents = data.history.filter((ev: any) => {
+            const key = `${ev.anchor_index}:${ev.outpoint}:${ev.direction}`;
+            return !csvWrittenRef.current.has(key);
+          });
+          if (newEvents.length > 0) {
+            try {
+              await walletHistoryCsvAppend({ wallet_name: walletName, events: newEvents });
+              for (const ev of newEvents) {
+                csvWrittenRef.current.add(`${(ev as any).anchor_index}:${(ev as any).outpoint}:${(ev as any).direction}`);
+              }
+            } catch { /* CSV-Fehler nicht kritisch */ }
+          }
+        }
+      } catch {
+        // keep last known history on transient errors
+      }
+    };
+    void loadHistory();
+    const hid = window.setInterval(() => void loadHistory(), 10000);
+    return () => { mounted = false; window.clearInterval(hid); };
+  }, [walletLockHex, nStatus?.status_http_running]);
+
+  useEffect(() => {
+    let mounted = true;
+    const loop = async () => {
+      try {
+        const st = await nodeStatus();
+        const logs = await nodeLogs(1000);
+        if (mounted) {
+          setNStatus(st);
+          setNLogs(logs);
+        }
+      } catch (e) {
+        if (mounted) {
+          setNMsg(`${t.error}: ${String(e)}`);
+        }
+      }
+    };
+
+    void loop();
+    const id = window.setInterval(() => void loop(), 1000);
+    return () => {
+      mounted = false;
+      window.clearInterval(id);
+    };
+  }, []);
+
+  const lastIn = state.seriesInboundRate.length ? state.seriesInboundRate[state.seriesInboundRate.length - 1] : null;
+  const lastOut = state.seriesOutboundRate.length ? state.seriesOutboundRate[state.seriesOutboundRate.length - 1] : null;
+
+  const rows = useMemo(() => state.verifyBucketOrder.map(bucketLabel), [state.verifyBucketOrder]);
+  const networkLogs = useMemo(() => {
+    return nLogs
+      .filter((line) => {
+        const low = line.toLowerCase();
+        return (
+          low.includes('headers_inv')
+          || low.includes('payload_inv')
+          || low.includes('gossip')
+          || low.includes('peer ')
+          || low.includes('peer=')
+          || low.includes('quic_listen')
+          || low.includes('quic')
+          || low.includes('mempool')
+          || low.includes('"type":"req"')
+          || low.includes('"type":"resp"')
+          || low.includes('"type":"payload_inv"')
+          || low.includes('"type":"headers_inv"')
+          || low.includes('"type":"quic_listen"')
+          || low.includes('"type":"peer')
+          || low.includes('proposed payload from mempool')
+        );
+      })
+      .slice(-300);
+  }, [nLogs]);
+  const systemLogs = useMemo(() => {
+    return nLogs
+      .filter((line) => {
+        const low = line.toLowerCase();
+        return (
+          low.includes('[node]')
+          || low.includes('[node-err]')
+          || low.includes('[status]')
+          || low.includes('[status-err]')
+          || low.includes('[statushttp]')
+          || low.includes('[statushttp-err]')
+          || low.includes('[mint]')
+          || low.includes('[mint-err]')
+          || low.includes('rocksdb secondary')
+          || low.includes('starting phantom-node')
+          || low.includes('starting status_http')
+          || low.includes('starting mint rpc server')
+          || low.includes('metrics_serve')
+          || low.includes('store_opened')
+          || low.includes('cert_written')
+          || low.includes('rayon global thread pool initialized')
+          || low.includes('status_addr')
+          || low.includes('status_http_addr')
+          || low.includes('genesis network_id')
+          || low.includes('role_args')
+          || low.includes('p2p_listen:')
+          || low.includes('mint_rpc_addr')
+          || low.includes('store_dir:')
+          || low.includes('log_file:')
+        );
+      })
+      .slice(-300);
+  }, [nLogs]);
+  const minerLogs = useMemo(() => {
+    return nLogs
+      .filter((line) => {
+        const low = line.toLowerCase();
+        return (
+          low.includes('[mint]')
+          || low.includes('[mint-err]')
+          || low.includes('pow_miner')
+          || low.includes('pow-miner')
+          || low.includes('mint_rpc')
+          || low.includes('mint-rpc')
+          || low.includes('mint candidate')
+          || low.includes('mint-decision')
+          || low.includes('null_mint')
+          || low.includes('decision=mint')
+          || low.includes('decision=null')
+          || low.includes('window_id=')
+          || low.includes('/mint/')
+        );
+      })
+      .slice(-300);
+  }, [nLogs]);
+  const validatorLogs = useMemo(() => {
+    return nLogs
+      .filter((line) => {
+        const low = line.toLowerCase();
+        return (
+          low.includes('[finalizer]')
+          || low.includes('validator ')
+          || low.includes('validator-')
+          || low.includes('prevote')
+          || low.includes('precommit')
+          || low.includes('vote_epoch')
+          || low.includes('header finality verified')
+          || low.includes('validator voting enabled')
+          || low.includes('/consensus/')
+        );
+      })
+      .slice(-300);
+  }, [nLogs]);
+  const errText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+
+  const startManagedNode = async (powMinerOverride?: boolean): Promise<void> => {
+    const effectiveCfg = loadAppConfig(cfg);
+
+    // Managed local node MUST bind to loopback. If cfg.statusUrl points elsewhere,
+    // fall back to the safe default.
+    let statusAddr = '127.0.0.1:8080';
+    try {
+      const u = new URL(effectiveCfg.statusUrl);
+      const host = u.hostname;
+      const port = u.port || (u.protocol === 'https:' ? '443' : '80');
+      if (host && port && isLoopbackHostname(host)) {
+        const hostNorm = host.trim().toLowerCase() === 'localhost' ? '127.0.0.1' : host;
+        const hostSock = hostNorm.includes(':') ? `[${hostNorm}]` : hostNorm;
+        statusAddr = `${hostSock}:${port}`;
+      }
+    } catch {
+      // keep default
+    }
+    const statusBase = `http://${statusAddr}`;
+
+    // Metrics: default 8090, but never collide with status/http/mint/p2p ports.
+    let metricsAddr = hostPortFromUrl(effectiveCfg.metricsUrlPrimary) ?? '127.0.0.1:8090';
+    const busyAddrs = new Set([
+      statusAddr,
+      effectiveCfg.nodeLocalAddr.trim(),
+      '127.0.0.1:19090',
+      effectiveCfg.nodeP2PListenAddr.trim(),
+    ]);
+    if (busyAddrs.has(metricsAddr)) {
+      metricsAddr = '127.0.0.1:8090';
+      if (busyAddrs.has(metricsAddr)) {
+        metricsAddr = '127.0.0.1:9100';
+      }
+    }
+
+    const peers = effectiveCfg.nodeBootstrapPeers
+      .map((p) => ({ addr: p.addr.trim(), cert_file: p.certFile.trim() }))
+      .filter((p) => p.addr || p.cert_file);
+
+    let token = effectiveCfg.bearerToken.trim();
+    if (!token) {
+      token = randomTokenHex(32);
+    }
+
+    const txProposer = effectiveCfg.nodeTxProposer;
+    const powMiner = typeof powMinerOverride === 'boolean' ? powMinerOverride : effectiveCfg.nodePowMiner;
+    const validatorIdRaw = effectiveCfg.nodeValidatorId.trim();
+    const blsPkRaw = effectiveCfg.nodeBlsPk.trim();
+    const mintLockRaw = effectiveCfg.nodeMintLock.trim();
+    const mintAmountRaw = effectiveCfg.nodeMintAmount.trim();
+    let mintAmount: number | null = null;
+
+    if (mintAmountRaw && mintAmountRaw.toLowerCase() !== 'auto') {
+      const parsed = Number(mintAmountRaw);
+      if (!Number.isFinite(parsed) || !Number.isSafeInteger(parsed)) {
+        throw new Error('Mint-Amount muss eine sichere Ganzzahl sein (oder leer/auto).');
+      }
+      mintAmount = parsed;
+    }
+
+    if (txProposer) {
+      if (validatorIdRaw && blsPkRaw) {
+        throw new Error('Bitte nur Validator-ID oder BLS-PubKey setzen, nicht beides.');
+      }
+      if (!validatorIdRaw && !blsPkRaw) {
+        throw new Error('Validator-ID oder BLS-PubKey erforderlich.');
+      }
+      if (validatorIdRaw && !isHexString(validatorIdRaw, 64)) {
+        throw new Error('Validator-ID muss 64 Hex-Zeichen haben.');
+      }
+      if (blsPkRaw && !isHexString(blsPkRaw, 96)) {
+        throw new Error('BLS-PubKey muss 96 Hex-Zeichen haben.');
+      }
+    }
+
+    if (powMiner) {
+      if (mintAmount !== null && mintAmount <= 0) {
+        throw new Error('Mint-Amount muss > 0 sein (oder leer/auto).');
+      }
+      if (!mintLockRaw) {
+        throw new Error('Mint-Lock ist erforderlich.');
+      }
+      if (!isHexString(mintLockRaw, 64)) {
+        throw new Error('Mint-Lock muss 64 Hex-Zeichen haben.');
+      }
+    }
+
+    const validatorId = validatorIdRaw ? normalizeHex(validatorIdRaw) : null;
+    const blsPk = blsPkRaw ? normalizeHex(blsPkRaw) : null;
+    const mintLock = mintLockRaw ? normalizeHex(mintLockRaw) : null;
+
+    // Ensure the dashboard is polling the node we are about to start
+    // (and persist token for mint/validators endpoints).
+    onApplyCfg({
+      ...effectiveCfg,
+      nodePowMiner: powMiner,
+      statusUrl: `${statusBase}/status`,
+      metricsUrlPrimary: metricsAddr ? `http://${metricsAddr}/metrics` : effectiveCfg.metricsUrlPrimary,
+      metricsUrlFallback: `${statusBase}/metrics`,
+      bearerToken: token,
+    });
+
+    await nodeStart({
+      status_addr: statusAddr,
+      status_http_addr: effectiveCfg.nodeLocalAddr.trim(),
+      mint_rpc_addr: '127.0.0.1:19090',
+      p2p_listen_addr: effectiveCfg.nodeP2PListenAddr.trim(),
+      store_dir: effectiveCfg.nodeStoreDir.trim(),
+      metrics_addr: metricsAddr,
+      bearer_token: token,
+      bootstrap_peers: peers,
+      unsafe_confirm_p2p_public: effectiveCfg.nodeP2PPublicConfirm,
+      tx_proposer: txProposer,
+      pow_miner: powMiner,
+      validator_id: validatorId,
+      bls_pk: blsPk,
+      mint_amount: mintAmount,
+      mint_lock: mintLock,
+      override_validator_control: effectiveCfg.nodeOverrideValidatorControl,
+      validator_passphrase: nValidatorPassphrase.trim() || null,
+      use_passphrase_role: nUsePassphraseRole,
+    });
+  };
+
+  const handleNodeStart = async (): Promise<void> => {
+    try {
+      setNBusy(true);
+      setNMsg('');
+      await startManagedNode(cfg.nodePowMiner);
+      setNMsg('Node gestartet.');
+    } catch (e) {
+      setNMsg(`${t.error}: ${errText(e)}`);
+
+    } finally {
+      setNBusy(false);
+    }
+  };
+
+  const handleNodeStop = async (): Promise<void> => {
+    try {
+      setNBusy(true);
+      setNMsg('');
+      await nodeStop();
+      setNMsg('Node gestoppt.');
+    } catch (e) {
+      setNMsg(`${t.error}: ${errText(e)}`);
+
+    } finally {
+      setNBusy(false);
+    }
+  };
+
+  const handleMinerStart = async (): Promise<void> => {
+    try {
+      setNBusy(true);
+      setNMsg('');
+
+      const st = await nodeStatus();
+      if (st.running && st.pow_miner_enabled) {
+        return;
+      }
+      if (st.running) {
+        await nodeStop();
+      }
+
+      await startManagedNode(true);
+    } catch (e) {
+      setNMsg(`${t.error}: ${errText(e)}`);
+
+    } finally {
+      setNBusy(false);
+    }
+  };
+
+  const handleMinerStop = async (): Promise<void> => {
+    try {
+      setNBusy(true);
+      setNMsg('');
+
+      const st = await nodeStatus();
+      if (!st.running || !st.pow_miner_enabled) {
+        return;
+      }
+
+      await nodeStop();
+      await startManagedNode(false);
+    } catch (e) {
+      setNMsg(`${t.error}: ${errText(e)}`);
+
+    } finally {
+      setNBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <div className="header">
+        <div className="header-left">
+          <div style={{ fontWeight: 500 }}>{t.appTitle}</div>
+          <div className="badge">
+            <div className={state.online ? 'dot ok' : 'dot'} />
+            <div>{state.online ? t.online : t.offline}</div>
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <button
+            onClick={() => {
+              void appQuit();
+            }}
+            title={t.appQuit}
+            style={{
+              padding: '8px 10px',
+              borderRadius: '6px',
+              border: '1px solid #22262A',
+              background: 'rgba(204, 204, 220, 0.08)',
+              color: 'rgb(204, 204, 220)',
+              cursor: 'pointer',
+            }}
+          >
+            {t.appQuit}
+          </button>
+
+          {(
+            [
+              ['node', t.tabNode],
+              ['miner', t.tabMiner],
+              ['validators', t.tabValidators],
+              ['wallet', t.tabWallet],
+              ['logs', t.tabLogs],
+            ] as [string, string][]
+          ).map(([id, label]) => {
+            const on = activeTab === id;
+            return (
+              <button
+                key={id}
+                onClick={() => setActiveTab(id as typeof activeTab)}
+                style={{
+                  padding: '8px 10px',
+                  borderRadius: '6px',
+                  border: '1px solid #22262A',
+                  background: on ? '#131619' : 'rgba(204, 204, 220, 0.08)',
+                  color: 'rgb(204, 204, 220)',
+                  cursor: 'pointer',
+                }}
+              >
+                {label}
+              </button>
+            );
+          })}
+
+          <button
+            onClick={onOpenSettings}
+            title={t.settings}
+            style={{
+              width: '36px',
+              height: '36px',
+              display: 'grid',
+              placeItems: 'center',
+              borderRadius: '6px',
+              border: '1px solid #22262A',
+              background: 'rgba(204, 204, 220, 0.08)',
+              color: 'rgb(204, 204, 220)',
+              cursor: 'pointer',
+            }}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path
+                d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+              <path
+                d="M19.4 15a1.8 1.8 0 0 0 .36 1.98l.05.05a2.17 2.17 0 0 1 0 3.07 2.17 2.17 0 0 1-3.07 0l-.05-.05A1.8 1.8 0 0 0 15 19.4a1.8 1.8 0 0 0-1.08 1.64V21a2.17 2.17 0 0 1-4.34 0v-.06A1.8 1.8 0 0 0 8.5 19.4a1.8 1.8 0 0 0-1.98.36l-.05.05a2.17 2.17 0 0 1-3.07 0 2.17 2.17 0 0 1 0-3.07l.05-.05A1.8 1.8 0 0 0 4.6 15a1.8 1.8 0 0 0-1.64-1.08H2.9a2.17 2.17 0 0 1 0-4.34h.06A1.8 1.8 0 0 0 4.6 8.5a1.8 1.8 0 0 0-.36-1.98l-.05-.05a2.17 2.17 0 0 1 0-3.07 2.17 2.17 0 0 1 3.07 0l.05.05A1.8 1.8 0 0 0 8.5 4.6 1.8 1.8 0 0 0 9.58 2.96V2.9a2.17 2.17 0 0 1 4.34 0v.06A1.8 1.8 0 0 0 15 4.6a1.8 1.8 0 0 0 1.98-.36l.05-.05a2.17 2.17 0 0 1 3.07 0 2.17 2.17 0 0 1 0 3.07l-.05.05A1.8 1.8 0 0 0 19.4 8.5a1.8 1.8 0 0 0 1.64 1.08h.06a2.17 2.17 0 0 1 0 4.34h-.06A1.8 1.8 0 0 0 19.4 15Z"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <div className="main">
+        {activeTab === 'node' && (
+          <div style={{ display: 'grid', gap: '12px' }}>
+            <div className="panel">
+              <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                <div>
+                  <div className="panel-title">{t.nodeTitle}<PanelInfo text={t.infoNode} /></div>
+                  <div className="small">
+                    {nStatus?.running ? t.running : t.stopped}
+                    {' · '}
+                    P2P: {nStatus?.p2p_running ? t.ok : t.down}
+                    {' · '}
+                    StatusServe: {nStatus?.status_running ? t.ok : t.down}
+                    {' · '}
+                    StatusHTTP: {nStatus?.status_http_running ? t.ok : t.down}
+                    {' · '}
+                    Mint-RPC: {nStatus?.mint_rpc_running ? t.ok : t.down}
+                  </div>
+                  {nStatus?.started_at_ts && (
+                    <div className="small">
+                      {t.nodeSince}: {new Date((nStatus.started_at_ts ?? 0) * 1000).toLocaleString('de-DE')}
+                    </div>
+                  )}
+                </div>
+
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                  <button
+                    onClick={() => void handleNodeStart()}
+                    disabled={!isTauri || nBusy || !!nStatus?.running}
+                    style={{
+                      padding: '8px 12px',
+                      borderRadius: '6px',
+                      border: '1px solid #22262A',
+                      background: '#131619',
+                      color: 'rgb(204, 204, 220)',
+                      cursor: !isTauri || nBusy || !!nStatus?.running ? 'not-allowed' : 'pointer',
+                      fontSize: '12px',
+                    }}
+                    title={!isTauri ? t.tauriOnly : ''}
+                  >
+                    {t.start}
+                  </button>
+
+                  <button
+                    onClick={() => void handleNodeStop()}
+                    disabled={!isTauri || nBusy || !nStatus?.running}
+                    style={{
+                      padding: '8px 12px',
+                      borderRadius: '6px',
+                      border: '1px solid #22262A',
+                      background: 'rgba(204, 204, 220, 0.08)',
+                      color: 'rgb(204, 204, 220)',
+                      cursor: !isTauri || nBusy || !nStatus?.running ? 'not-allowed' : 'pointer',
+                      fontSize: '12px',
+                    }}
+                    title={!isTauri ? t.tauriOnly : ''}
+                  >
+                    {t.stop}
+                  </button>
+
+                  <button
+                    onClick={() =>
+                      void (async () => {
+                        try {
+                          setNBusy(true);
+                          setNMsg('');
+                          if (!cfg.nodeBackupTarget.trim()) {
+                            setNMsg(t.nodeBackupTargetEmpty);
+                            return;
+                          }
+                          const resp = await nodeBackupStore({
+                            store_dir: cfg.nodeStoreDir.trim(),
+                            backup_target: cfg.nodeBackupTarget.trim(),
+                            local_node_addr: cfg.nodeLocalAddr.trim(),
+                            mint_rpc_addr: nStatus?.mint_rpc_addr ?? '127.0.0.1:19090',
+                            p2p_listen_addr: cfg.nodeP2PListenAddr.trim(),
+                            metrics_url: cfg.metricsUrlPrimary.trim(),
+                          });
+                          if (!resp.ok) {
+                            setNMsg(t.nodeBackupFailed);
+                            return;
+                          }
+                          setNMsg(resp.config_path ? `${t.nodeBackupCreated}: ${resp.dst} (cfg: ${resp.config_path})` : `${t.nodeBackupCreated}: ${resp.dst}`);
+                        } catch (e) {
+                          setNMsg(`${t.error}: ${String(e)}`);
+                        } finally {
+                          setNBusy(false);
+                        }
+                      })()
+                    }
+                    disabled={!isTauri || nBusy || !!nStatus?.running}
+                    style={{
+                      padding: '8px 12px',
+                      borderRadius: '6px',
+                      border: '1px solid #22262A',
+                      background: 'rgba(110, 159, 255, 0.14)',
+                      color: 'rgb(204, 204, 220)',
+                      cursor: !isTauri || nBusy || !!nStatus?.running ? 'not-allowed' : 'pointer',
+                      fontSize: '12px',
+                    }}
+                    title={!isTauri ? t.tauriOnly : `${t.backup} → ${t.settingsBackupTarget}`}
+                  >
+                    {t.backup}
+                  </button>
+                </div>
+              </div>
+
+              <div className="panel-body" style={{ display: 'grid', gap: '8px' }}>
+                <div
+                  style={{
+                    display: 'grid',
+                    gap: '6px',
+                    maxWidth: '520px',
+                    padding: '8px 10px',
+                    borderRadius: '6px',
+                    border: '1px solid #22262A',
+                    background: 'rgba(204, 204, 220, 0.04)',
+                  }}
+                >
+                  <div className="small">{t.nodeValidatorPassphrase}</div>
+                  <input
+                    type="password"
+                    value={nValidatorPassphrase}
+                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNValidatorPassphrase(e.target.value)}
+                    autoComplete="off"
+                    style={{
+                      padding: '8px 10px',
+                      borderRadius: '6px',
+                      border: '1px solid #22262A',
+                      background: '#0B0C0E',
+                      color: 'rgb(204, 204, 220)',
+                    }}
+                  />
+                  <label className="small" style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                    <input
+                      type="checkbox"
+                      checked={nUsePassphraseRole}
+                      onChange={(e) => setNUsePassphraseRole(e.target.checked)}
+                    />
+                    {t.nodePassphraseRole}
+                  </label>
+                  {cfg.nodeTxProposer && !nValidatorPassphrase.trim() && (
+                    <div className="small" style={{ color: 'rgba(245, 158, 11, 0.95)' }}>
+                      {t.hint}: {t.nodeValidatorPassphraseHint}
+                    </div>
+                  )}
+                </div>
+                {nStatus?.last_error && (
+                  <div className="small" style={{ color: '#d10e5c' }}>
+                    {t.error}: {String(nStatus.last_error)}
+                  </div>
+                )}
+                {nMsg && (
+                  <div className="small" style={{ color: nMsg.startsWith(t.error) ? '#d10e5c' : 'rgba(204, 204, 220, 0.75)' }}>
+                    {nMsg}
+                  </div>
+                )}
+                {!cfg.bearerToken.trim() && (
+                  <div className="small" style={{ color: 'rgba(245, 158, 11, 0.95)' }}>
+                    {t.hint}: {t.nodeBearerTokenHint}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="grid-4">
+              <StatTile label={t.statInboundRate} value={formatByteRate(lastIn)} />
+              <StatTile label={t.statOutboundRate} value={formatByteRate(lastOut)} />
+              <StatTile label={t.statRpcBroadcastTotal} value={formatInt(state.rpcBroadcastTotal)} />
+              <StatTile label={t.statRpcBroadcastErrors} value={formatInt(state.rpcErrorsTotal)} />
+            </div>
+
+            <div className="grid-2">
+              <div className="panel" style={{ minHeight: '280px' }}>
+                <div className="panel-header">
+                  <div className="panel-title">{t.chartP2PTraffic}<PanelInfo text={t.infoChartP2p} /></div>
+                </div>
+                <div className="panel-body" style={{ padding: 0, height: '240px' }}>
+                  <LineChart t={state.seriesT} inbound={state.seriesInboundRate} outbound={state.seriesOutboundRate} />
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gap: '12px' }}>
+                <div className="panel" style={{ minHeight: '240px' }}>
+                  <div className="panel-header">
+                    <div className="panel-title">{t.chartVerifyHeatmap}<PanelInfo text={t.infoChartHeatmap} /></div>
+                    <div className="small">{t.chartVerifyAvg}: {formatSeconds(state.verifyAvgSec)}</div>
+                  </div>
+                  <div className="panel-body" style={{ padding: 0, height: '200px' }}>
+                    <HeatmapCanvas rowLabels={rows} columns={state.heatmapColumns} />
+                  </div>
+                </div>
+
+                <div className="panel" style={{ minHeight: '180px' }}>
+                  <div className="panel-header">
+                    <div className="panel-title">{t.chartNetworkTps}<PanelInfo text={t.infoChartTps} /></div>
+                    <div className="small">{t.chartTpsSubtitle}</div>
+                  </div>
+                  <div className="panel-body" style={{ padding: 0, height: '140px' }}>
+                    <GaugeCanvas value={state.tps} min={0} max={100} label={t.chartNetworkTps} formatFn={(v) => v < 1 ? v.toFixed(2) : v.toFixed(1)} />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* P2P Netzwerk + Mempool & Proposer nebeneinander */}
+            <div className="grid-2">
+              <div className="panel">
+                <div className="panel-header">
+                  <div className="panel-title">{t.p2pTitle}<PanelInfo text={t.infoP2p} /></div>
+                </div>
+                <div className="panel-body">
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span className="small">{t.p2pPeers}:</span>
+                      <span>{state.p2pPeersTotal !== null ? state.p2pPeersTotal : 0}
+                        <span className="small" style={{ marginLeft: '4px' }}>
+                          ({nStatus?.p2p_running ? t.connecting : t.offline})
+                        </span>
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span className="small">{t.p2pMiners}:</span>
+                      <span>{state.p2pPeersMiner !== null ? state.p2pPeersMiner : 0}
+                        <span className="small" style={{ marginLeft: '4px' }}>
+                          ({nStatus?.p2p_running ? t.connecting : t.offline})
+                        </span>
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span className="small">{t.p2pValidator}:</span>
+                      <span>{state.p2pPeersValidator !== null ? state.p2pPeersValidator : 0}
+                        <span className="small" style={{ marginLeft: '4px' }}>
+                          ({nStatus?.p2p_running ? t.connecting : t.offline})
+                        </span>
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span className="small">{t.p2pSent}:</span>
+                      <span>{formatBytes(state.p2pOutboundBytes)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span className="small">{t.p2pReceived}:</span>
+                      <span>{formatBytes(state.p2pInboundBytes)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span className="small">{t.p2pKnown}:</span>
+                      <span>{formatInt(state.p2pPeersKnown)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span className="small">{t.p2pBanned}:</span>
+                      <span>{formatInt(state.p2pPeersBanned)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span className="small">{t.p2pOutboxDepth}:</span>
+                      <span>{formatInt(state.p2pOutboxDepth)}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="panel">
+                <div className="panel-header">
+                  <div className="panel-title">{t.mempoolTitle}<PanelInfo text={t.infoMempool} /></div>
+                </div>
+                <div className="panel-body">
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span className="small">{t.mempoolMintPropagation}:</span>
+                      <span style={{ color: nStatus?.mint_rpc_running ? '#1a7f4b' : '#d10e5c', fontWeight: 600 }}>
+                        {nStatus?.mint_rpc_running ? t.active : t.inactive}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span className="small">{t.mempoolSize}:</span>
+                      <span>{formatInt(state.mempoolSize)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span className="small">{t.mempoolAcceptedRejected}:</span>
+                      <span>{formatInt(state.mempoolAccepted)} / {formatInt(state.mempoolRejected)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span className="small">{t.mempoolDuplicate}:</span>
+                      <span>{formatInt(state.mempoolDuplicate)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span className="small">{t.mempoolEvicted}:</span>
+                      <span>{formatInt(state.mempoolTtlEvict)} / {formatInt(state.mempoolCapEvict)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span className="small">{t.mempoolInvalidated}:</span>
+                      <span>{formatInt(state.mempoolInvalidated)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span className="small">{t.mempoolProposerBuilt}:</span>
+                      <span>{formatInt(state.proposerBuiltTotal)} / {formatInt(state.proposerLastSize)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span className="small">{t.mempoolProposerPending}:</span>
+                      <span>{formatInt(state.proposerPending)}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        )}
+
+        {activeTab === 'miner' && (() => {
+          const mm = state.minerMetrics;
+          const ms = state.mintStatus;
+          const minerRunning = !!nStatus?.pow_miner_enabled && !!nStatus?.running;
+          const minerWaiting = minerRunning && mm.threads === 0;
+          const submitOk = mm.submitAcceptedTotal ?? 0;
+          const submitStale = mm.submitStaleTotal ?? 0;
+          const submitRej = mm.submitRejectedTotal ?? 0;
+          const submitErr = mm.submitErrorsTotal ?? 0;
+          const submitTotal = submitOk + submitStale + submitRej + submitErr;
+          const rejectPct = submitTotal > 0 ? (((submitRej + submitStale) / submitTotal) * 100).toFixed(1) : '-';
+          const tplOk = mm.templatesTotal ?? 0;
+          const tplErr = mm.templateErrorsTotal ?? 0;
+          return (
+          <div style={{ display: 'grid', gap: '12px' }}>
+            {/* Steuerung */}
+            <div className="panel">
+              <div
+                className="panel-header"
+                style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}
+              >
+                <div>
+                  <div className="panel-title">{t.minerTitle}<PanelInfo text={t.infoMiner} /></div>
+                  <div className="small">
+                    {minerRunning
+                      ? <span style={{ color: '#1a7f4b' }}>{t.active}</span>
+                      : <span style={{ color: '#d10e5c' }}>{t.stopped}</span>}
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                  <button
+                    onClick={() => void handleMinerStart()}
+                    disabled={!isTauri || nBusy || minerRunning}
+                    style={{
+                      padding: '8px 12px', borderRadius: '6px',
+                      border: '1px solid #22262A',
+                      background: '#0B0C0E', color: 'rgb(204, 204, 220)',
+                      cursor: !isTauri || nBusy || minerRunning ? 'not-allowed' : 'pointer',
+                      fontSize: '12px',
+                    }}
+                  >
+                    {t.minerStart}
+                  </button>
+                  <button
+                    onClick={() => void handleMinerStop()}
+                    disabled={!isTauri || nBusy || !minerRunning}
+                    style={{
+                      padding: '8px 12px', borderRadius: '6px',
+                      border: '1px solid #22262A',
+                      background: 'rgba(204, 204, 220, 0.08)', color: 'rgb(204, 204, 220)',
+                      cursor: !isTauri || nBusy || !minerRunning ? 'not-allowed' : 'pointer',
+                      fontSize: '12px',
+                    }}
+                  >
+                    {t.minerStop}
+                  </button>
+                </div>
+              </div>
+              {nMsg && (
+                <div className="panel-body">
+                  <div className="small" style={{ color: nMsg.startsWith(t.error) ? '#d10e5c' : 'rgba(204, 204, 220, 0.75)' }}>
+                    {nMsg}
+                  </div>
+                </div>
+              )}
+              {!cfg.nodeMintLock.trim() && (
+                <div className="panel-body">
+                  <div className="small" style={{ color: 'rgba(245, 158, 11, 0.95)' }}>
+                    {t.hint}: Mint-Lock → {t.settings} → Node
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Blocks + Mining Status nebeneinander */}
+            <div className="grid-2">
+              {/* Blocks */}
+              <div className="panel">
+                <div className="panel-header">
+                  <div className="panel-title">Blocks<PanelInfo text={t.infoMinerSubmit} /></div>
+                </div>
+                <div className="panel-body">
+                  <div className="kpi-row" style={{ flexDirection: 'column', gap: '6px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span className="small">Height:</span>
+                      <span style={{ fontWeight: 600 }}>{ms ? ms.mint_height : 0}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span className="small">Tip:</span>
+                      <span style={{ fontFamily: 'monospace', fontSize: '11px' }}>
+                        {ms && ms.last_mint_id !== '0'.repeat(64) ? `${ms.last_mint_id.slice(0, 16)}…` : '-'}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span className="small">{t.minerLastMine}:</span>
+                      <span>{formatEpochAge(mm.lastSubmitOkEpoch)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span className="small">{t.minerDifficulty}:</span>
+                      <span>{ms ? ms.target_bits : 0}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span className="small">Round:</span>
+                      <span>{ms?.phase ?? '-'}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span className="small">Hit bucket:</span>
+                      <span>{ms?.hit_bucket ?? '-'}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span className="small">Supply:</span>
+                      <span>{formatSupplyPhm(ms?.total_supply)}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Mining Status */}
+              <div className="panel">
+                <div className="panel-header">
+                  <div className="panel-title">Mining<PanelInfo text={t.infoMinerTemplate} /></div>
+                </div>
+                <div className="panel-body">
+                  <div className="kpi-row" style={{ flexDirection: 'column', gap: '4px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span className="small">{t.validatorsStatus}:</span>
+                      <span style={{ color: minerRunning ? '#1a7f4b' : '#d10e5c', fontWeight: 600 }}>
+                        {minerRunning ? t.active : t.stopped}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span className="small">{t.minerHashrate}:</span>
+                      <span style={{ fontWeight: 600 }}>{formatHashrate(mm.hashrate)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span className="small">Submits:</span>
+                      <span style={{ fontSize: '11px' }}>
+                        ok={submitOk} stale={submitStale} rej={submitRej} err={submitErr}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span className="small">{t.minerRejectRate}:</span>
+                      <span>{rejectPct}{rejectPct !== '-' ? '%' : ''}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span className="small">Templates:</span>
+                      <span style={{ fontSize: '11px' }}>ok={tplOk} err={tplErr}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span className="small">{t.minerLastTemplate}:</span>
+                      <span>{formatEpochAge(mm.lastTemplateEpoch)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span className="small">{t.minerThreads}:</span>
+                      <span>{mm.threads !== null ? mm.threads : '-'}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span className="small">{t.minerActiveLocalSlots}:</span>
+                      <span>{formatInt(mm.activeLocalSlots)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span className="small">{t.minerActiveWorkSlots}:</span>
+                      <span>{formatInt(mm.activeWorkSlots)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span className="small">{t.minerRewardTo}:</span>
+                      <span style={{ fontFamily: 'monospace', fontSize: '10px' }}>
+                        {cfg.nodeMintLock.trim() ? `${stripHexPrefix(cfg.nodeMintLock.trim()).slice(0, 20)}…` : '-'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Statusleiste */}
+            <div style={{
+              display: 'flex', gap: '16px', flexWrap: 'wrap', padding: '8px 12px',
+              borderRadius: '6px', border: '1px solid #22262A',
+              background: 'rgba(204, 204, 220, 0.04)', fontSize: '12px',
+              color: 'rgba(204, 204, 220, 0.75)',
+            }}>
+              <span>{t.minerUptime}: {formatUptime(mm.uptimeSec)}</span>
+              <span>Memory: {mm.memoryMb !== null ? `${mm.memoryMb} MB` : '-'}</span>
+              <span>CPU: {mm.cpuPct !== null ? `${mm.cpuPct.toFixed(1)}%` : '-'}</span>
+              <span>TPS: {state.tps !== null ? (state.tps < 1 ? state.tps.toFixed(2) : state.tps.toFixed(1)) : '-'}</span>
+            </div>
+
+            {/* Errors (miner RPC) */}
+            {mm.lastError && (
+              <div className="panel">
+                <div className="panel-header">
+                  <div className="panel-title" style={{ color: '#d10e5c' }}>Errors (miner RPC)</div>
+                </div>
+                <div className="panel-body">
+                  <div className="small" style={{ color: '#d10e5c' }}>{mm.lastError}</div>
+                </div>
+              </div>
+            )}
+
+            {/* Finality */}
+            <div className="grid-4">
+              <StatTile label={t.validatorsFinalityEvents} value={formatInt(state.finalityEventsTotal)} />
+              <StatTile label={t.validatorsFinalityMints} value={formatInt(state.finalityMintEventsTotal)} />
+              <StatTile label={t.validatorsMintHeight} value={formatInt(state.mintStatus?.mint_height ?? null)} />
+            </div>
+
+            <div className="grid-4">
+              <StatTile label={t.minerCandidatesQueued} value={formatInt(mm.candidateQueuedTotal)} />
+              <StatTile label={t.minerCandidatesReplaced} value={formatInt(mm.candidateReplacedTotal)} />
+              <StatTile label={t.minerCandidatesSkipped} value={formatInt(mm.candidateSkippedNotBetterTotal)} />
+              <StatTile label={t.minerScopeResets} value={formatInt(mm.candidateScopeResetsTotal)} />
+            </div>
+
+          </div>
+          );
+        })()}
+
+        {activeTab === 'wallet' && (() => {
+          const mintLockNorm = cfg.nodeMintLock.trim().replace(/^0x/i, '').toLowerCase();
+          const walletLockNorm = walletLockHex.toLowerCase();
+          const mintLockMismatch = walletLockNorm && mintLockNorm && mintLockNorm !== walletLockNorm;
+          const liveAge = wLastUpdate ? Math.round((Date.now() - wLastUpdate) / 1000) : null;
+          const isLive = liveAge !== null && liveAge < 5;
+          return (
+          <div style={{ display: 'grid', gap: '12px' }}>
+            {mintLockMismatch && (
+              <div style={{
+                padding: '10px 14px',
+                borderRadius: '8px',
+                background: 'rgba(245, 158, 11, 0.12)',
+                border: '1px solid rgba(245, 158, 11, 0.3)',
+                color: 'rgba(245, 158, 11, 0.95)',
+                fontSize: '12px',
+              }}>
+                {t.walletMintLockWarning}
+              </div>
+            )}
+
+            {walletLockHex && (
+              <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                <button
+                  onClick={() => {
+                    const next = { ...cfg, nodeMintLock: walletLockHex.trim() };
+                    setWMsg('Mining-Reward-Lock auf aktive Wallet gesetzt.');
+                    onApplyCfg(next);
+                  }}
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: '6px',
+                    border: '1px solid #22262A',
+                    background: walletLockNorm && mintLockNorm === walletLockNorm ? 'rgba(16, 185, 129, 0.12)' : 'rgba(204, 204, 220, 0.08)',
+                    color: 'rgb(204, 204, 220)',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Aktive Wallet als Mining-Ziel verwenden
+                </button>
+                <div className="small" style={{ color: 'rgba(204, 204, 220, 0.65)' }}>
+                  Rewards gehen dann direkt auf {walletIsWatchOnly ? 'die BitBox-Watch-only-Adresse' : 'deine aktive Walletadresse'}.
+                </div>
+              </div>
+            )}
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{
+                width: '8px', height: '8px', borderRadius: '50%',
+                background: isLive ? '#1a7f4b' : '#d10e5c',
+                display: 'inline-block',
+                boxShadow: isLive ? '0 0 6px #1a7f4b' : 'none',
+                animation: isLive ? 'pulse 2s infinite' : 'none',
+              }} />
+              <span className="small" style={{ color: 'rgba(204,204,220,0.6)' }}>
+                {isLive ? t.walletLive : t.walletOffline}
+                {wLastUpdate ? ` · ${t.walletUpdated}: ${new Date(wLastUpdate).toLocaleTimeString('de-DE')}` : ''}
+              </span>
+            </div>
+
+            <div className="grid-4">
+              <div className="stat">
+                <div className="stat-label">{t.walletReceiveAddress}</div>
+                <div className="stat-value" style={{ fontSize: '13px', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace', wordBreak: 'break-all' }}>
+                  {!walletAddr ? t.walletLocked : wAddrEditing ? (
+                    <input
+                      autoFocus
+                      type="text"
+                      defaultValue={wAddrLabel}
+                      placeholder="Name vergeben..."
+                      style={{ fontSize: '13px', width: '100%', background: 'rgba(204,204,220,0.08)', border: '1px solid rgba(204,204,220,0.2)', borderRadius: '4px', padding: '2px 6px', color: 'inherit', fontFamily: 'inherit' }}
+                      onBlur={(e) => {
+                        const v = e.currentTarget.value.trim();
+                        setWAddrLabel(v);
+                        try { localStorage.setItem('pc_addr_label', v); } catch {}
+                        setWAddrEditing(false);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') (e.currentTarget as HTMLInputElement).blur();
+                        if (e.key === 'Escape') { setWAddrEditing(false); }
+                      }}
+                    />
+                  ) : (
+                    <span
+                      style={{ cursor: 'pointer' }}
+                      title={`${walletAddr}\nKlick zum Umbenennen`}
+                      onClick={() => setWAddrEditing(true)}
+                    >
+                      {wAddrLabel || `${walletAddr.slice(0, 8)}...${walletAddr.slice(-8)}`}
+                    </span>
+                  )}
+                </div>
+                <div className="stat-sub" style={{ fontSize: '10px', color: 'rgba(204,204,220,0.45)', marginTop: '2px' }}>
+                  {walletAddr ? `${walletAddr.slice(0, 8)}...${walletAddr.slice(-8)}` : ''}
+                </div>
+              </div>
+              <StatTile label={t.walletBalance} value={wData ? formatCoins(wData.balance) : t.noData} />
+              <StatTile label={t.walletStaked} value={wData ? formatCoins(wData.staked_balance) : t.noData} />
+              <StatTile label={t.walletUtxos} value={wData ? formatInt(wData.n_utxos) : t.noData} />
+            </div>
+
+            <div className="grid-2">
+              <div className="panel">
+                <div className="panel-header">
+                  <div className="panel-title">{t.walletLocalTitle}<PanelInfo text={t.infoWalletLocal} /></div>
+                  <div className="small">
+                    {t.walletWalletName}: {walletName}
+                    {wallet?.exists ? ` · ${walletIsWatchOnly ? 'BitBox Watch-only' : 'Verschlüsselte Hotwallet'}` : ''}
+                  </div>
+                </div>
+                <div className="panel-body" style={{ display: 'grid', gap: '10px' }}>
+                  {!wallet?.exists ? (
+                    <>
+                      <div className="small" style={{ color: 'rgba(204, 204, 220, 0.75)' }}>
+                        Verschlüsselte Hotwallet als Fallback. Bevorzugt wird die BitBox-Watch-only-Wallet rechts.
+                      </div>
+                      <div className="small" style={{ color: 'rgba(204, 204, 220, 0.55)' }}>
+                        Die Seed Phrase wird lokal nur im verschlüsselten Seed-Store abgelegt und niemals auf der Node gespeichert.
+                      </div>
+                      <WalletCreateWizard
+                        initialWalletName={walletName}
+                        initialHrp={(wallet?.hrp ?? 'pc') || 'pc'}
+                        onCreated={(w) => {
+                          onWallet(w);
+                          setWMsg(`${t.walletCreate} ✓`);
+                        }}
+                      />
+                    </>
+                  ) : (
+                    <>
+                      {walletKind === 'hot' ? (
+                        <>
+                          <div className="small">{t.walletPassphrase}</div>
+                          <input
+                            value={wUnlockPass}
+                            type="password"
+                            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setWUnlockPass(e.target.value)}
+                            disabled={wBusy}
+                            style={{
+                              padding: '10px',
+                              borderRadius: '6px',
+                              border: '1px solid #22262A',
+                              background: '#0B0C0E',
+                              color: 'rgb(204, 204, 220)',
+                            }}
+                          />
+                        </>
+                      ) : (
+                        <div className="small" style={{ color: 'rgba(204, 204, 220, 0.65)' }}>
+                          BitBox-Watch-only wird ohne zusätzliches lokales Wallet-Passwort aktiviert. Die Hardware bleibt die spendende Autorität.
+                        </div>
+                      )}
+
+                      <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                        <button
+                          onClick={() =>
+                            void (async () => {
+                              try {
+                                setWBusy(true);
+                                setWMsg('');
+                                const resp = await walletUnlock(
+                                  walletName,
+                                  walletKind === 'hot' ? wUnlockPass : '',
+                                );
+                                setWAddrs(resp.addrs);
+                                setWUnlockPass('');
+                                if (resp.selected_addr && resp.selected_lock_hex) {
+                                  onWallet({
+                                    exists: true,
+                                    wallet_name: resp.wallet_name,
+                                    wallet_kind: resp.wallet_kind,
+                                    watch_only: resp.watch_only,
+                                    address: resp.selected_addr,
+                                    lock_hex: resp.selected_lock_hex,
+                                    hrp: resp.addrs.length > 0 ? resp.addrs[0].hrp : null,
+                                  });
+                                }
+                                setWMsg(`${t.walletUnlock} ✓`);
+                              } catch (e) {
+                                setWMsg(`${t.error}: ${String(e)}`);
+                              } finally {
+                                setWBusy(false);
+                              }
+                            })()
+                          }
+                          disabled={wBusy || !isTauri}
+                          style={{
+                            padding: '10px 12px',
+                            borderRadius: '6px',
+                            border: '1px solid #22262A',
+                            background: '#131619',
+                            color: 'rgb(204, 204, 220)',
+                            cursor: wBusy || !isTauri ? 'not-allowed' : 'pointer',
+                          }}
+                        >
+                          {t.walletUnlock}
+                        </button>
+
+                        <button
+                          onClick={() =>
+                            void (async () => {
+                              try {
+                                setWBusy(true);
+                                setWMsg('');
+                                await walletLock();
+                                setWAddrs([]);
+                                setWData(null);
+                                const refreshed = await walletStatus(walletName);
+                                onWallet(refreshed);
+                                setWMsg(`${t.walletLock} ✓`);
+                              } catch (e) {
+                                setWMsg(`${t.error}: ${String(e)}`);
+                              } finally {
+                                setWBusy(false);
+                              }
+                            })()
+                          }
+                          disabled={wBusy || !isTauri}
+                          style={{
+                            padding: '10px 12px',
+                            borderRadius: '6px',
+                            border: '1px solid #22262A',
+                            background: 'rgba(204, 204, 220, 0.08)',
+                            color: 'rgb(204, 204, 220)',
+                            cursor: wBusy || !isTauri ? 'not-allowed' : 'pointer',
+                          }}
+                        >
+                          {t.walletLock}
+                        </button>
+                      </div>
+
+                      {wAddrs.length > 0 && (
+                        <div style={{ display: 'grid', gap: '6px' }}>
+                          <div className="small">{t.walletSelectAddress}</div>
+                          <select
+                            value={walletAddr || wAddrs[0]?.addr || ''}
+                            onChange={(e: React.ChangeEvent<HTMLSelectElement>) => {
+                              const addr = e.target.value;
+                              void walletSelectAddr(walletName, addr)
+                                .then((st) => {
+                                  onWallet(st);
+                                  setWMsg(`${t.walletSelectAddress} ✓`);
+                                })
+                                .catch((err) => setWMsg(`${t.error}: ${String(err)}`));
+                            }}
+                            disabled={wBusy}
+                            style={{
+                              padding: '10px',
+                              borderRadius: '6px',
+                              border: '1px solid #22262A',
+                              background: '#0B0C0E',
+                              color: 'rgb(204, 204, 220)',
+                            }}
+                          >
+                            {wAddrs.map((a) => (
+                              <option key={a.addr} value={a.addr}>
+                                {a.label ? `${a.label} — ` : ''}{a.addr}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+
+                      {walletAddr && (
+                        <div style={{ display: 'grid', gap: '6px' }}>
+                          <div className="small">{t.walletReceiveAddress}</div>
+                          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                            <input
+                              value={walletAddr}
+                              readOnly
+                              style={{
+                                flex: 1,
+                                minWidth: 220,
+                                padding: '10px',
+                                borderRadius: '6px',
+                                border: '1px solid #22262A',
+                                background: '#0B0C0E',
+                                color: 'rgb(204, 204, 220)',
+                                fontFamily:
+                                  'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+                                fontSize: '12px',
+                              }}
+                            />
+                            <button
+                              onClick={() => {
+                                const p = navigator.clipboard?.writeText(walletAddr);
+                                if (!p) {
+                                  setWMsg(t.error);
+                                  return;
+                                }
+                                void p.then(() => setWMsg(t.walletCopied)).catch(() => setWMsg(t.error));
+                              }}
+                              disabled={wBusy}
+                              style={{
+                                padding: '10px 12px',
+                                borderRadius: '6px',
+                                border: '1px solid #22262A',
+                                background: 'rgba(204, 204, 220, 0.08)',
+                                color: 'rgb(204, 204, 220)',
+                                cursor: wBusy ? 'not-allowed' : 'pointer',
+                              }}
+                            >
+                              {t.walletCopyAddress}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {walletLockHex && (
+                        <div style={{ display: 'grid', gap: '6px' }}>
+                          <div className="small">{t.walletLockHex}</div>
+                          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                            <input
+                              value={walletLockHex}
+                              readOnly
+                              style={{
+                                flex: 1,
+                                minWidth: 220,
+                                padding: '10px',
+                                borderRadius: '6px',
+                                border: '1px solid #22262A',
+                                background: '#0B0C0E',
+                                color: 'rgb(204, 204, 220)',
+                                fontFamily:
+                                  'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+                                fontSize: '12px',
+                              }}
+                            />
+                            <button
+                              onClick={() => {
+                                const p = navigator.clipboard?.writeText(walletLockHex);
+                                if (!p) {
+                                  setWMsg(t.error);
+                                  return;
+                                }
+                                void p.then(() => setWMsg(t.walletCopied)).catch(() => setWMsg(t.error));
+                              }}
+                              disabled={wBusy}
+                              style={{
+                                padding: '10px 12px',
+                                borderRadius: '6px',
+                                border: '1px solid #22262A',
+                                background: 'rgba(204, 204, 220, 0.08)',
+                                color: 'rgb(204, 204, 220)',
+                                cursor: wBusy ? 'not-allowed' : 'pointer',
+                              }}
+                            >
+                              {t.walletCopyAddress}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {wMsg && (
+                        <div
+                          className="small"
+                          style={{ color: wMsg.startsWith(t.error) ? '#d10e5c' : 'rgba(204, 204, 220, 0.75)' }}
+                        >
+                          {wMsg}
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              </div>
+
+              <div className="panel">
+                <div className="panel-header">
+                  <div className="panel-title">{t.walletSend}</div>
+                  <div className="small">
+                    {t.walletSendFrom}: {walletAddr ? shortHex(walletAddr, 10) : t.walletLocked}
+                    {walletIsWatchOnly ? ' · Watch-only: Senden später über Hardware-Signaturpfad' : ''}
+                  </div>
+                </div>
+                <div className="panel-body" style={{ display: 'grid', gap: '10px' }}>
+                  {walletIsWatchOnly && (
+                    <div className="small" style={{ color: 'rgba(204, 204, 220, 0.65)' }}>
+                      Diese Wallet ist Watch-only. Empfangen und Mining-Rewards funktionieren direkt, Senden bleibt bis zum echten Hardware-Signierpfad deaktiviert.
+                    </div>
+                  )}
+                  <div className="small">{t.walletSendTo}</div>
+                  <input
+                    value={wSendTo}
+                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setWSendTo(e.target.value)}
+                    disabled={wBusy || walletIsWatchOnly}
+                    style={{
+                      padding: '10px',
+                      borderRadius: '6px',
+                      border: '1px solid #22262A',
+                      background: '#0B0C0E',
+                      color: 'rgb(204, 204, 220)',
+                    }}
+                  />
+
+                  <div className="grid-4" style={{ gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '10px' }}>
+                    <div style={{ display: 'grid', gap: '6px' }}>
+                      <div className="small">{t.walletSendAmount}</div>
+                      <input
+                        value={wSendAmount}
+                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => setWSendAmount(e.target.value)}
+                        disabled={wBusy || walletIsWatchOnly}
+                        style={{
+                          padding: '10px',
+                          borderRadius: '6px',
+                          border: '1px solid #22262A',
+                          background: '#0B0C0E',
+                          color: 'rgb(204, 204, 220)',
+                        }}
+                      />
+                    </div>
+                    <div style={{ display: 'grid', gap: '6px' }}>
+                      <div className="small">{t.walletSendFee}</div>
+                      <input
+                        value={wSendFee}
+                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => setWSendFee(e.target.value)}
+                        disabled={wBusy || walletIsWatchOnly}
+                        style={{
+                          padding: '10px',
+                          borderRadius: '6px',
+                          border: '1px solid #22262A',
+                          background: '#0B0C0E',
+                          color: 'rgb(204, 204, 220)',
+                        }}
+                      />
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                    <button
+                      onClick={() =>
+                        void (async () => {
+                          try {
+                            setWBusy(true);
+                            setWSendMsg('');
+                            if (!walletAddr || !walletLockHex) {
+                              setWSendMsg(`${t.error}: ${t.walletLocked}`);
+                              return;
+                            }
+                            const amount = Number.parseInt(wSendAmount || '0', 10);
+                            const fee = Number.parseInt(wSendFee || '0', 10);
+                            if (!Number.isFinite(amount) || amount <= 0) {
+                              setWSendMsg(`${t.error}: ${t.walletSendAmount}`);
+                              return;
+                            }
+                            if (!Number.isFinite(fee) || fee < 0) {
+                              setWSendMsg(`${t.error}: ${t.walletSendFee}`);
+                              return;
+                            }
+                            const resp = await walletSend({
+                              from_addr: walletAddr,
+                              to_addr: wSendTo.trim(),
+                              amount,
+                              fee,
+                              change_addr: walletAddr,
+                            });
+                            if (!resp.ok) {
+                              setWSendMsg(`${t.error}: ${resp.stderr.trim() || 'wallet-send failed'}`);
+                              return;
+                            }
+                            setWSendMsg(resp.stdout.trim() ? `OK: ${resp.stdout.trim()}` : 'OK');
+                            setWSendTo('');
+                            setWSendAmount('');
+                            setWSendFee('0');
+                          } catch (e) {
+                            setWSendMsg(`${t.error}: ${String(e)}`);
+                          } finally {
+                            setWBusy(false);
+                          }
+                        })()
+                      }
+                      disabled={wBusy || !isTauri || !walletCanSpend}
+                      style={{
+                        padding: '10px 12px',
+                        borderRadius: '6px',
+                        border: '1px solid #22262A',
+                        background: '#131619',
+                        color: 'rgb(204, 204, 220)',
+                        cursor: wBusy || !isTauri || !walletCanSpend ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      {t.walletSend}
+                    </button>
+                  </div>
+
+                  {wSendMsg && (
+                    <div
+                      className="small"
+                      style={{ color: wSendMsg.startsWith(t.error) ? '#d10e5c' : 'rgba(204, 204, 220, 0.75)' }}
+                    >
+                      {wSendMsg}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="grid-2">
+              <div className="panel">
+                <div className="panel-header">
+                  <div className="panel-title">BitBox02</div>
+                  <div className="small">Transport: {cfg.bitboxTransport} · Bridge: {cfg.bitboxBridgeUrl}</div>
+                </div>
+                <div className="panel-body" style={{ display: 'grid', gap: '10px' }}>
+                  <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                    <button
+                      onClick={() =>
+                        void (async () => {
+                          try {
+                            setBbBusy(true);
+                            setBbMsg('');
+                            const s = await bitboxBridgeStatus({ transport: cfg.bitboxTransport, bridge_url: cfg.bitboxBridgeUrl });
+                            setBbMsg(s);
+                          } catch (e) {
+                            setBbMsg(`${t.error}: ${String(e)}`);
+                          } finally {
+                            setBbBusy(false);
+                          }
+                        })()
+                      }
+                      disabled={bbBusy || !isTauri}
+                      style={{
+                        padding: '10px 12px',
+                        borderRadius: '6px',
+                        border: '1px solid #22262A',
+                        background: 'rgba(204, 204, 220, 0.08)',
+                        color: 'rgb(204, 204, 220)',
+                        cursor: bbBusy ? 'not-allowed' : isTauri ? 'pointer' : 'not-allowed',
+                      }}
+                      title={isTauri ? t.walletBitboxBridgeCheck : t.tauriOnly}
+                    >
+                      {t.walletBitboxBridgeCheck}
+                    </button>
+
+                    <button
+                      onClick={() =>
+                        void (async () => {
+                          try {
+                            setBbBusy(true);
+                            setBbMsg('');
+                            const out = await bitboxHwiEnumerate({ transport: cfg.bitboxTransport, bridge_url: cfg.bitboxBridgeUrl });
+                            if (!out.ok) {
+                              setBbMsg(`${t.error}: ${out.stderr.trim() || 'hwi-enumerate failed'}`);
+                              return;
+                            }
+                            const devices = JSON.parse(out.stdout || '[]') as any[];
+                            const found = (Array.isArray(devices) ? devices : []).find((d) => {
+                              const t = String((d as any)?.type ?? '').toLowerCase();
+                              const m = String((d as any)?.model ?? '').toLowerCase();
+                              return t.includes('bitbox') || m.includes('bitbox');
+                            });
+                            const fp = found ? String((found as any)?.fingerprint ?? '').trim() : '';
+                            const tr = found ? String((found as any)?.transport ?? '').trim() : '';
+                            if (found) {
+                              setBbFingerprint(fp);
+                              setBbStatus(fp ? `BitBox02 OK, Fingerprint: ${fp}${tr ? ` (Transport: ${tr})` : ''}` : `BitBox02 OK${tr ? ` (Transport: ${tr})` : ''}`);
+                            } else if (Array.isArray(devices) && devices.length === 0) {
+                              setBbFingerprint('');
+                              setBbStatus(t.walletBitboxNotFound);
+                            } else {
+                              setBbFingerprint('');
+                              setBbStatus(t.walletBitboxNotRecognized);
+                            }
+                            if (out.stderr.trim()) {
+                              setBbMsg(out.stderr.trim());
+                            }
+                          } catch (e) {
+                            setBbMsg(`${t.error}: ${String(e)}`);
+                          } finally {
+                            setBbBusy(false);
+                          }
+                        })()
+                      }
+                      disabled={bbBusy || !isTauri}
+                      style={{
+                        padding: '10px 12px',
+                        borderRadius: '6px',
+                        border: '1px solid #22262A',
+                        background: '#131619',
+                        color: 'rgb(204, 204, 220)',
+                        cursor: bbBusy ? 'not-allowed' : isTauri ? 'pointer' : 'not-allowed',
+                      }}
+                    >
+                      {t.walletBitboxDetect}
+                    </button>
+
+                    <button
+                      onClick={() =>
+                        void (async () => {
+                          try {
+                            setBbBusy(true);
+                            setBbMsg('');
+                            const out = await bitboxHwiGetXpub({
+                              transport: cfg.bitboxTransport,
+                              bridge_url: cfg.bitboxBridgeUrl,
+                              fingerprint: bbFingerprint || null,
+                              derivation: "m/86'/12345'/0'",
+                            });
+                            if (!out.ok) {
+                              setBbMsg(`${t.error}: ${out.stderr.trim() || 'hwi-get-xpub failed'}`);
+                              return;
+                            }
+                            const val = JSON.parse(out.stdout || '{}') as any;
+                            const xpub = String(val?.xpub ?? '').trim();
+                            if (!xpub) {
+                              setBbMsg(`${t.error}: xpub missing: ${out.stdout.trim()}`);
+                              return;
+                            }
+                            setBbXpub(xpub);
+                            setBbStatus(t.walletBitboxXpubOk);
+                            if (out.stderr.trim()) {
+                              setBbMsg(out.stderr.trim());
+                            }
+                          } catch (e) {
+                            setBbMsg(`${t.error}: ${String(e)}`);
+                          } finally {
+                            setBbBusy(false);
+                          }
+                        })()
+                      }
+                      disabled={bbBusy || !isTauri}
+                      style={{
+                        padding: '10px 12px',
+                        borderRadius: '6px',
+                        border: '1px solid #22262A',
+                        background: 'rgba(204, 204, 220, 0.08)',
+                        color: 'rgb(204, 204, 220)',
+                        cursor: bbBusy ? 'not-allowed' : isTauri ? 'pointer' : 'not-allowed',
+                      }}
+                    >
+                      {t.walletBitboxReadXpub}
+                    </button>
+                  </div>
+
+                  {bbStatus && <div className="small">{bbStatus}</div>}
+
+                  {bbFingerprint && (
+                    <div style={{ display: 'grid', gap: '6px' }}>
+                      <div className="small">Fingerprint</div>
+                      <input
+                        value={bbFingerprint}
+                        readOnly
+                        style={{
+                          padding: '10px',
+                          borderRadius: '6px',
+                          border: '1px solid #22262A',
+                          background: '#0B0C0E',
+                          color: 'rgb(204, 204, 220)',
+                        }}
+                      />
+                    </div>
+                  )}
+
+                  {bbXpub && (
+                    <div style={{ display: 'grid', gap: '6px' }}>
+                      <div className="small">XPub</div>
+                      <textarea
+                        value={bbXpub}
+                        readOnly
+                        style={{
+                          padding: '10px',
+                          borderRadius: '6px',
+                          border: '1px solid #22262A',
+                          background: '#0B0C0E',
+                          color: 'rgb(204, 204, 220)',
+                          minHeight: '96px',
+                          resize: 'vertical',
+                        }}
+                      />
+                    </div>
+                  )}
+
+                  <div
+                    style={{
+                      display: 'grid',
+                      gap: '10px',
+                      padding: '12px',
+                      borderRadius: '8px',
+                      border: '1px solid rgba(204, 204, 220, 0.12)',
+                      background: 'rgba(204, 204, 220, 0.04)',
+                    }}
+                  >
+                    <div className="small" style={{ color: 'rgba(204, 204, 220, 0.85)' }}>
+                      Bevorzugter Pfad: BitBox als Watch-only-Wallet. Die Hardware hält den Schlüssel, das Dashboard speichert nur Wallet-DB und verschlüsselten Xpub-Store.
+                    </div>
+                    <div style={{ display: 'grid', gap: '6px' }}>
+                      <div className="small">Wallet-Name</div>
+                      <input
+                        value={bbWalletName}
+                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => setBbWalletName(e.target.value)}
+                        disabled={bbBusy || Boolean(wallet?.exists)}
+                        style={{
+                          padding: '10px',
+                          borderRadius: '6px',
+                          border: '1px solid #22262A',
+                          background: '#0B0C0E',
+                          color: 'rgb(204, 204, 220)',
+                        }}
+                      />
+                    </div>
+                    <div style={{ display: 'grid', gap: '6px' }}>
+                      <div className="small">HRP</div>
+                      <input
+                        value={bbWalletHrp}
+                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => setBbWalletHrp(e.target.value)}
+                        disabled={bbBusy || Boolean(wallet?.exists)}
+                        style={{
+                          padding: '10px',
+                          borderRadius: '6px',
+                          border: '1px solid #22262A',
+                          background: '#0B0C0E',
+                          color: 'rgb(204, 204, 220)',
+                        }}
+                      />
+                    </div>
+                    <div className="small" style={{ color: 'rgba(204, 204, 220, 0.6)' }}>
+                      Der Watch-only-Bestand bleibt lokal geschützt, ohne dass du zusätzlich ein Phantom-Passwort für die BitBox pflegen musst. Für Mining reicht später die Empfangsadresse, nicht der spendbare Schlüssel.
+                    </div>
+                    <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                      <button
+                        onClick={() =>
+                          void (async () => {
+                            try {
+                              setBbBusy(true);
+                              setBbMsg('');
+                              if (wallet?.exists) {
+                                setBbMsg('Es existiert bereits ein Wallet. Bitte zuerst bewusst auf ein anderes Wallet wechseln oder dieses sichern.');
+                                return;
+                              }
+                              if (!bbXpub.trim()) {
+                                setBbMsg(`${t.error}: Bitte zuerst Xpub von der BitBox lesen.`);
+                                return;
+                              }
+                              const w = await walletCreateWatchOnly({
+                                wallet_name: bbWalletName.trim(),
+                                hrp: bbWalletHrp.trim() || 'pc',
+                                xpub: bbXpub.trim(),
+                                derivation: "m/86'/12345'/0'",
+                                fingerprint: bbFingerprint || null,
+                              });
+                              onWallet(w);
+                              setBbMsg(`BitBox Watch-only-Wallet erstellt: ${w.address ?? ''}`);
+                              setWMsg('BitBox Watch-only-Wallet aktiv.');
+                            } catch (e) {
+                              setBbMsg(`${t.error}: ${String(e)}`);
+                            } finally {
+                              setBbBusy(false);
+                            }
+                          })()
+                        }
+                        disabled={bbBusy || !isTauri || Boolean(wallet?.exists) || !bbXpub.trim()}
+                        style={{
+                          padding: '10px 12px',
+                          borderRadius: '6px',
+                          border: '1px solid #22262A',
+                          background: '#131619',
+                          color: 'rgb(204, 204, 220)',
+                          cursor: bbBusy || !isTauri || Boolean(wallet?.exists) || !bbXpub.trim() ? 'not-allowed' : 'pointer',
+                        }}
+                      >
+                        BitBox-Wallet erstellen
+                      </button>
+                      {wallet?.exists && (
+                        <div className="small" style={{ color: 'rgba(204, 204, 220, 0.55)' }}>
+                          BitBox-Import ist nur für ein neues Wallet gedacht. Das aktive Wallet bleibt bewusst eindeutig.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {bbMsg && (
+                    <div className="small" style={{ color: bbMsg.startsWith(t.error) ? '#d10e5c' : 'rgba(204, 204, 220, 0.75)' }}>
+                      {bbMsg}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+          );
+        })()}
+
+        {activeTab === 'validators' && (
+          <ValidatorsTab cfg={cfg} wallet={wallet} votes={{
+            sent_total: state.votesSentTotal,
+            accepted_total: state.votesAcceptedTotal,
+            rejected_total: state.votesRejectedTotal,
+            sent_rate: state.votesSentRate,
+            accepted_rate: state.votesAcceptedRate,
+            rejected_rate: state.votesRejectedRate,
+          }} finality={{
+            avgSec: state.finalityAvgSec,
+            eventsTotal: state.finalityEventsTotal,
+            verifyAvgSec: state.verifyAvgSec,
+            verifyCount: state.verifyCount,
+            consensusErrors: state.consensusErrorsTotal,
+          }} miner={{
+            activeLocalSlots: state.minerMetrics.activeLocalSlots,
+            activeWorkSlots: state.minerMetrics.activeWorkSlots,
+            candidateQueuedTotal: state.minerMetrics.candidateQueuedTotal,
+            candidateReplacedTotal: state.minerMetrics.candidateReplacedTotal,
+            candidateSkippedNotBetterTotal: state.minerMetrics.candidateSkippedNotBetterTotal,
+            candidateScopeResetsTotal: state.minerMetrics.candidateScopeResetsTotal,
+          }} validators={validators} loading={valLoading} error={valError} ts={valTs} onRefresh={async () => {
+            setValLoading(true);
+            setValError(null);
+            try {
+              let resp: ValidatorsResponse;
+              if (isTauri && nStatus?.status_http_running) {
+                resp = await nodeConsensusValidators();
+              } else {
+                const base = cfg.statusUrl.replace(/\/status\/?$/, '');
+                const raw = await httpGet(`${base}/consensus/validators`, cfg.bearerToken);
+                resp = JSON.parse(raw) as ValidatorsResponse;
+              }
+              if (!resp.ok) throw new Error('Validators endpoint returned ok=false');
+              setValidators(resp.validators);
+              setValTs(resp.ts);
+            } catch (e) {
+              const errStr = String(e);
+              if (errStr.includes('404') || errStr.includes('Not Found') || errStr.includes('fetch') || errStr.includes('network')) {
+                setValError(t.validatorsEndpointUnavailable);
+                setValidators([]);
+              } else {
+                setValError(errStr);
+              }
+            } finally {
+              setValLoading(false);
+            }
+          }} mintStatus={state.mintStatus} />
+        )}
+
+        {activeTab === 'logs' && (
+          <div style={{ display: 'grid', gap: '12px' }}>
+            <div
+              style={{
+                display: 'grid',
+                gap: '12px',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
+              }}
+            >
+              <div className="panel">
+                <div className="panel-header">
+                  <div className="panel-title">{t.logsNetworkTitle}<PanelInfo text={t.infoLogs} /></div>
+                  <div className="small">{t.logsNetworkSubtitle}</div>
+                </div>
+                <div className="panel-body" style={{ padding: 0 }}>
+                  <LogViewport text={networkLogs.length > 0 ? networkLogs.join('\n') : t.logsEmpty} maxHeight="30vh" />
+                </div>
+              </div>
+
+              <div className="panel">
+                <div className="panel-header">
+                  <div className="panel-title">{t.logsSystemTitle}<PanelInfo text={t.infoLogs} /></div>
+                  <div className="small">{t.logsSystemSubtitle}</div>
+                </div>
+                <div className="panel-body" style={{ padding: 0 }}>
+                  <LogViewport text={systemLogs.length > 0 ? systemLogs.join('\n') : t.logsEmpty} maxHeight="30vh" />
+                </div>
+              </div>
+            </div>
+
+            <div
+              style={{
+                display: 'grid',
+                gap: '12px',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
+              }}
+            >
+              <div className="panel">
+                <div className="panel-header">
+                  <div className="panel-title">{t.logsMinerTitle}<PanelInfo text={t.infoLogs} /></div>
+                  <div className="small">{t.logsMinerSubtitle}</div>
+                </div>
+                <div className="panel-body" style={{ padding: 0 }}>
+                  <div
+                    className="small"
+                    style={{
+                      display: 'flex',
+                      gap: '10px',
+                      flexWrap: 'wrap',
+                      padding: '8px 10px',
+                      borderBottom: '1px solid rgba(204, 204, 220, 0.08)',
+                      color: 'rgba(204, 204, 220, 0.72)',
+                    }}
+                  >
+                    <span>{t.minerActiveLocalSlots}: {formatInt(state.minerMetrics.activeLocalSlots)}</span>
+                    <span>{t.minerActiveWorkSlots}: {formatInt(state.minerMetrics.activeWorkSlots)}</span>
+                    <span>{t.minerCandidatesQueued}: {formatInt(state.minerMetrics.candidateQueuedTotal)}</span>
+                    <span>{t.minerCandidatesReplaced}: {formatInt(state.minerMetrics.candidateReplacedTotal)}</span>
+                  </div>
+                  <LogViewport text={minerLogs.length > 0 ? minerLogs.join('\n') : t.logsEmpty} maxHeight="42vh" />
+                </div>
+              </div>
+
+              <div className="panel">
+                <div className="panel-header">
+                  <div className="panel-title">{t.logsValidatorTitle}<PanelInfo text={t.infoLogs} /></div>
+                  <div className="small">{t.logsValidatorSubtitle}</div>
+                </div>
+                <div className="panel-body" style={{ padding: 0 }}>
+                  <div
+                    className="small"
+                    style={{
+                      display: 'flex',
+                      gap: '10px',
+                      flexWrap: 'wrap',
+                      padding: '8px 10px',
+                      borderBottom: '1px solid rgba(204, 204, 220, 0.08)',
+                      color: 'rgba(204, 204, 220, 0.72)',
+                    }}
+                  >
+                    <span>{t.validatorsFinalityEvents}: {formatInt(state.finalityEventsTotal)}</span>
+                    <span>{t.validatorsFinalityMints}: {formatInt(state.finalityMintEventsTotal)}</span>
+                    <span>{t.validatorsMintHeight}: {formatInt(state.mintStatus?.mint_height ?? null)}</span>
+                    <span>{t.minerCandidatesSkipped}: {formatInt(state.minerMetrics.candidateSkippedNotBetterTotal)}</span>
+                    <span>{t.minerScopeResets}: {formatInt(state.minerMetrics.candidateScopeResetsTotal)}</span>
+                  </div>
+                  <LogViewport text={validatorLogs.length > 0 ? validatorLogs.join('\n') : t.logsEmpty} maxHeight="42vh" />
+                </div>
+              </div>
+            </div>
+
+            <div className="panel">
+              <div className="panel-header">
+                <div className="panel-title">{t.logsDashboardTitle}<PanelInfo text={t.infoLogs} /></div>
+              </div>
+              <div className="panel-body" style={{ padding: 0 }}>
+                <LogViewport
+                  text={state.logs.length > 0 ? state.logs.join('\n') : 'Noch keine Dashboard-Logs verfügbar.'}
+                  maxHeight="20vh"
+                />
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+export function App(): JSX.Element {
+  const defaults: AppConfig = {
+    statusUrl: 'http://127.0.0.1:8080/status',
+    metricsUrlPrimary: 'http://127.0.0.1:8090/metrics',
+    metricsUrlFallback: 'http://127.0.0.1:8090/metrics',
+    bearerToken: '',
+    bitboxTransport: 'auto',
+    bitboxBridgeUrl: 'http://127.0.0.1:8178',
+    nodeLocalAddr: '127.0.0.1:8443',
+    nodeStoreDir: 'pc-data',
+    nodeP2PListenAddr: '127.0.0.1:9000',
+    nodeP2PPublicConfirm: false,
+    nodeBootstrapPeers: [],
+    nodeBackupTarget: '',
+    nodeTxProposer: false,
+    nodePowMiner: false,
+    nodeValidatorId: '',
+    nodeBlsPk: '',
+    nodeMintAmount: '',
+    nodeMintLock: '',
+    nodeOverrideValidatorControl: false,
+  };
+  const [cfg, setCfg] = useState<AppConfig>(() => loadAppConfig(defaults));
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [locale, setLocale] = useState<Locale>(() => loadLocale());
+  const [t, setT] = useState(FALLBACK_TEXTS);
+  useEffect(() => { fetchTexts(locale).then(setT); }, [locale]);
+  const handleSetLocale = useMemo(() => (l: Locale) => { setLocale(l); saveLocale(l); }, []);
+
+  const [wallet, setWallet] = useState<WalletStatus | null>(() => {
+    const saved = loadJson<WalletStatus>(WALLET_ACTIVE_KEY);
+    const name =
+      typeof saved?.wallet_name === 'string' && saved.wallet_name.trim()
+        ? saved.wallet_name.trim()
+        : 'default';
+    if (saved) {
+      return { ...saved, wallet_name: name };
+    }
+    return {
+      exists: false,
+      wallet_name: name,
+      wallet_kind: null,
+      watch_only: false,
+      hrp: null,
+      address: null,
+      lock_hex: null,
+    };
+  });
+
+  useEffect(() => {
+    saveJson(WALLET_ACTIVE_KEY, wallet);
+  }, [wallet]);
+
+  useEffect(() => {
+    const wname = wallet?.wallet_name && wallet.wallet_name.trim() ? wallet.wallet_name.trim() : 'default';
+    let cancelled = false;
+    void walletStatus(wname)
+      .then((st) => {
+        if (cancelled) {
+          return;
+        }
+        if (!st.exists) {
+          setWallet({
+            exists: false,
+            wallet_name: wname,
+            wallet_kind: null,
+            watch_only: false,
+            hrp: null,
+            address: null,
+            lock_hex: null,
+          });
+          return;
+        }
+        setWallet({ ...st, wallet_name: st.wallet_name ?? wname });
+      })
+      .catch(() => {
+        if (cancelled) {
+          return;
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [wallet?.wallet_name]);
+
+  useEffect(() => {
+    saveAppConfig(cfg);
+  }, [cfg]);
+
+  useEffect(() => {
+    if (!isTauri) {
+      return;
+    }
+    let disposed = false;
+    let unlisten: null | (() => void) = null;
+    void (async () => {
+      const { emit, listen } = await import('@tauri-apps/api/event');
+      if (disposed) {
+        return;
+      }
+      unlisten = await listen<DashboardSmokeHttpRequest>('phantom-dashboard-smoke-http-get', async (event) => {
+        const req = event.payload;
+        let ok = false;
+        let error: string | null = null;
+        let bodyPreview: string | null = null;
+        try {
+          const body = await bridgeHttpGet(req.url, req.bearer_token ?? '');
+          bodyPreview = body.slice(0, 512);
+          if (req.expect_body_includes && !body.includes(req.expect_body_includes)) {
+            error = `expected response to include ${JSON.stringify(req.expect_body_includes)}`;
+          } else {
+            ok = true;
+          }
+        } catch (e) {
+          error = e instanceof Error ? e.message : String(e);
+        }
+        await emit('phantom-dashboard-smoke-http-get-result', {
+          ok,
+          error,
+          body_preview: bodyPreview,
+        });
+      });
+      await emit('phantom-dashboard-smoke-ready');
+    })();
+    return () => {
+      disposed = true;
+      if (unlisten) {
+        void unlisten();
+      }
+    };
+  }, []);
+
+  return (
+    <I18nProvider value={{ t, locale, setLocale: handleSetLocale }}>
+      <ConnectionSettingsDialog open={settingsOpen} cfg={cfg} onClose={() => setSettingsOpen(false)} onApply={setCfg} walletName={wallet?.wallet_name?.trim() || 'default'} />
+      <Dashboard
+        cfg={cfg}
+        onOpenSettings={() => setSettingsOpen(true)}
+        wallet={wallet}
+        onWallet={setWallet}
+        onApplyCfg={setCfg}
+      />
+    </I18nProvider>
+  );
+}

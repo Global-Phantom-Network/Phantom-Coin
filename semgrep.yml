@@ -1,0 +1,105 @@
+rules:
+  # This is a small, repo-local starter ruleset. It is intentionally conservative:
+  # it focuses on common "sink" APIs, to prompt a human review of taint/validation.
+  #
+  # NOTE: This is not a full taint analysis for Rust; it is a guardrail.
+
+  #
+  # Rust: Command execution sinks
+  #
+  # Shell invocation is a common injection footgun. We only flag the most dangerous
+  # form: passing a *dynamic* script string to `sh -c`/`bash -c`/`zsh -c` etc.
+  #
+  # If you need a shell for terminal UX, prefer a constant script and pass the
+  # actual command/args as positional parameters (e.g. bash -lc '"$@"' -- prog args...).
+  - id: phantom-rust-command-shell-sh-c-dynamic
+    languages: [rust]
+    message: >
+      Dynamic script passed to `sh -c`. This is a common command-injection vector.
+      Prefer passing program+args directly to Command, or use a constant script and
+      pass the command via positional parameters.
+    severity: WARNING
+    patterns:
+      - pattern-either:
+          - pattern: Command::new("sh").arg("-c").arg($SCRIPT)
+          - pattern: Command::new("sh").args(["-c", $SCRIPT, ...])
+      - metavariable-regex:
+          metavariable: $SCRIPT
+          regex: '^(?!")'
+
+  - id: phantom-rust-command-shell-bash-c-dynamic
+    languages: [rust]
+    message: >
+      Dynamic script passed to `bash -c`/`bash -lc`. This is a common command-injection vector.
+      Prefer passing program+args directly to Command, or use a constant script and
+      pass the command via positional parameters.
+    severity: WARNING
+    patterns:
+      - pattern-either:
+          - pattern: Command::new("bash").arg("-c").arg($SCRIPT)
+          - pattern: Command::new("bash").arg("-lc").arg($SCRIPT)
+          - pattern: Command::new("bash").args(["-c", $SCRIPT, ...])
+          - pattern: Command::new("bash").args(["-lc", $SCRIPT, ...])
+      - metavariable-regex:
+          metavariable: $SCRIPT
+          regex: '^(?!")'
+
+  - id: phantom-rust-command-shell-zsh-c-dynamic
+    languages: [rust]
+    message: >
+      Dynamic script passed to `zsh -c`. This is a common command-injection vector.
+      Prefer passing program+args directly to Command, or use a constant script and
+      pass the command via positional parameters.
+    severity: WARNING
+    patterns:
+      - pattern-either:
+          - pattern: Command::new("zsh").arg("-c").arg($SCRIPT)
+          - pattern: Command::new("zsh").args(["-c", $SCRIPT, ...])
+      - metavariable-regex:
+          metavariable: $SCRIPT
+          regex: '^(?!")'
+
+  - id: phantom-rust-reqwest-danger-accept-invalid-certs
+    languages: [rust]
+    message: >
+      reqwest is configured to accept invalid TLS certificates. This is almost always a security bug.
+    severity: ERROR
+    pattern: $B.danger_accept_invalid_certs(true)
+
+  - id: phantom-rust-reqwest-danger-accept-invalid-hostnames
+    languages: [rust]
+    message: >
+      reqwest is configured to accept invalid hostnames. This is almost always a security bug.
+    severity: ERROR
+    pattern: $B.danger_accept_invalid_hostnames(true)
+
+  - id: phantom-rust-path-traversal-format-dotdot
+    languages: [rust]
+    message: >
+      format! contains a '..' path segment. Ensure path construction is canonicalized and cannot be influenced by untrusted input.
+    severity: WARNING
+    pattern-either:
+      - pattern: format!("$PRE/../$POST", ...)
+      - pattern: format!("$PRE\\..\\$POST", ...)
+
+  #
+  # JS/TS: Code injection sinks (dashboard / web tooling)
+  #
+  - id: phantom-js-eval
+    languages: [javascript, typescript]
+    message: >
+      Avoid eval/new Function. This is almost always a code-injection risk.
+    severity: ERROR
+    pattern-either:
+      - pattern: eval($X)
+      - pattern: new Function($X)
+
+  - id: phantom-js-child-process-exec
+    languages: [javascript, typescript]
+    message: >
+      child_process.exec/execSync with a string command is shell-invocation and a common injection risk.
+      Prefer execFile/spawn with an argument array and an allowlist.
+    severity: ERROR
+    pattern-either:
+      - pattern: child_process.exec($CMD, ...)
+      - pattern: child_process.execSync($CMD, ...)

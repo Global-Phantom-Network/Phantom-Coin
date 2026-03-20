@@ -1,0 +1,38 @@
+[package]
+name = "phantom-tui"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+description = "Unified Phantom TUI (Node/Wallet/Miner/Signer/Tools)"
+
+[[bin]]
+name = "phantom-tui"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+crossterm = "0.28"
+ratatui = "0.29"
+argon2 = { version = "0.5", features = ["std"] }
+base64 = "0.22"
+bech32 = "0.9"
+bitcoin = "0.32"
+bitbox-api = { path = "../bitbox-api-rs", default-features = false, features = ["usb", "bridge"] }
+chacha20poly1305 = "0.10"
+futures = { version = "0.3", default-features = false, features = ["std", "executor"] }
+hex = "0.4"
+phantom-i18n = { path = "../phantom-i18n" }
+phantom-signer = { path = "../phantom-signer" }
+pc-crypto = { path = "../pc-crypto" }
+pc-consensus = { path = "../pc-consensus" }
+pc-types = { path = "../pc-types" }
+pc-codec = { path = "../pc-codec" }
+rand = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls-native-roots", "rustls-tls", "stream"] }
+secp256k1 = { version = "0.29", features = ["global-context"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+tokio = { version = "1.39", features = ["rt-multi-thread", "macros", "time", "sync", "signal"] }
+zeroize = "1"

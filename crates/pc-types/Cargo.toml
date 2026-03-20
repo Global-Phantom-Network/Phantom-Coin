@@ -1,0 +1,15 @@
+[package]
+name = "pc-types"
+version = "0.1.1"
+edition = "2021"
+license = "AGPL-3.0-only"
+
+[dependencies]
+pc-crypto = { path = "../pc-crypto" }
+pc-codec = { path = "../pc-codec" }
+serde = { version = "1.0", features = ["derive"] }
+
+[dev-dependencies]
+proptest = "1.5"
+hex = "0.4"
+serde_json = "1.0"
